@@ -1,0 +1,168 @@
+---
+title: "Exploratory Data Analysis"
+author: "Logan Wu"
+date: "7 January 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=T, cache=T)
+library(tidyverse)
+library(data.table)
+library(sf)
+library(leaflet)
+library(spdep) #easily create weight matrices
+library(starma)
+library(forecast)
+
+# read in a manageable portion of the dataset for now
+raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv") %>% head(50000)
+raw.ts[,Date_Time := as.POSIXct(Date_Time, format="%m/%d/%Y %I:%M:%S %p")]
+
+raw.geo <- read.csv("data/Pedestrian_sensor_locations.csv")
+```
+
+## Process TS data
+
+```{r}
+data.ts = raw.ts %>%
+  select(-ID)
+
+ggplot(data.ts %>% filter(Sensor_ID %in% seq(6)), aes(x=Date_Time, y=Hourly_Counts, color=Sensor_ID)) +
+  geom_line(alpha=0.5) +
+  facet_grid(Sensor_Name~.) +
+  guides(color=F)
+```
+
+Data is incomplete for some sensors. Possible reasons include maintenance.
+
+```{r}
+ggplot(data.ts, aes(x=Hourly_Counts)) +
+  geom_density(alpha=0.5, fill="red", color=NA)
+
+ggplot(data.ts, aes(x=log(Hourly_Counts+1))) +
+  geom_density(alpha=0.5, fill="blue", color=NA)
+```
+
+
+```{r}
+data.ts2 <- data.ts %>%
+  select(Date_Time, Sensor_Name, Hourly_Counts) %>%
+  spread(key=Sensor_Name, value=Hourly_Counts) %>%
+  select(-Date_Time) %>%
+  as.ts %>%
+  na.contiguous # analysis does not include missing data
+  # stcenter# %>%
+
+ggcorrplot(cor(data.ts2[,1:16]), show.legend=F, type="lower", lab=T, lab_size=1.5)
+```
+
+Spatial correlations have varying levels -- factors other than time of day/year lead to correlation.
+
+```{r}
+
+```
+
+## Experiment with models
+
+Fit a simple time series without any cross-correlation
+
+```{r}
+result <- lapply(data.ts2, function(x) forecast(auto.arima(x)))
+plot(result[[1]])
+```
+
+## Multiple ARIMA
+
+```{r}
+# marima.result = marima(data.ts2, ar.pattern=2)
+```
+
+Ignore this: example from website
+
+```{r}
+# Create a 5x5 regular grid which will be our lattice
+sites <- matrix(0, 25, 2)
+for (i in 1:5) {
+	for (j in 1:5)
+		sites[(i-1)*5 + j, ] <- c(i, j) - .5
+}
+plot(sites)
+
+# Create a uniform first order neighbourhood
+knb <- dnearneigh(sites, 0, 1)
+plot(knb, sites)
+
+# Lag the neighbourhood to create other order matrices
+knb <- nblag(knb, 4)
+klist <- list(order0=diag(25),
+           order1=nb2mat(knb[[1]]),
+           order2=nb2mat(knb[[2]]),
+           order3=nb2mat(knb[[3]]),
+           order4=nb2mat(knb[[4]]))
+		   
+# Simulate a STARMA(2;1) process
+eps <- matrix(rnorm(200*25), 200, 25)
+star <- eps
+for (t in 3:200) {
+	star[t,] <- (.4*klist[[1]] + .25*klist[[2]]) %*% star[t-1,] + 
+	  (.25*klist[[1]]) %*% star[t-2,] + (-.3*klist[[2]]) %*% eps[t-1,] + 
+	  eps[t, ]
+}
+
+star <- star[101:200,]	# Remove first observations
+star <- stcenter(star)	# Center and scale the dataset
+										   
+# Identify the process
+stacf(star, klist)
+stpacf(star, klist)
+
+# Estimate the process
+ar <- matrix(c(1, 1, 1, 0), 2, 2)
+ma <- matrix(c(0, 1), 1, 2)
+model <- starma(star, klist, ar, ma)
+model
+summary(model)
+
+# Diagnose the process
+stcor.test(model$residuals, klist, fitdf=4)
+stacf(model$residuals, klist)
+stpacf(model$residuals, klist)
+
+# starma(matrix.ts, c(diag(18)), ar=0, ma=0)
+```
+
+## Process geographic data
+
+```{r}
+data.geo = raw.geo %>%
+  mutate(Latitude = as.numeric(Latitude),
+         Longitude = as.numeric(Longitude)) %>%
+  # st_as_sf(coords=c("Latitude", "Longitude")) %>%
+  select(-Status, -Upload.Date, -Geometry, -Location.Type)
+
+leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(data.geo$Longitude, data.geo$Latitude,
+                   label=data.geo$Sensor.Description,
+                   weight=0, radius=4, fillOpacity=0.5)
+```
+
+## Estimate neighborhoods based on the example
+
+```{r}
+sites = data.geo %>% select(Latitude, Longitude) %>% as.matrix
+knb <- dnearneigh(sites, 0, 0.006)
+plot(knb, sites)
+
+# Lag the neighbourhood to create other order matrices
+knb <- nblag(knb, 3)
+klist <- list(order0=diag(58),
+           order1=nb2mat(knb[[1]]),
+           order2=nb2mat(knb[[2]]),
+           order3=nb2mat(knb[[3]]))
+
+# Identify the process
+stacf(data.ts2, klist)
+stpacf(data.ts2, klist)
+```
