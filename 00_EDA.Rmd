@@ -14,9 +14,10 @@ library(leaflet)
 library(spdep) #easily create weight matrices
 library(starma)
 library(forecast)
+library(ggcorrplot)
 
 # read in a manageable portion of the dataset for now
-raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv") %>% head(50000)
+raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv") %>% head(25000)
 raw.ts[,Date_Time := as.POSIXct(Date_Time, format="%m/%d/%Y %I:%M:%S %p")]
 
 raw.geo <- read.csv("data/Pedestrian_sensor_locations.csv")
@@ -154,7 +155,9 @@ leaflet() %>%
 sites = data.geo %>% select(Latitude, Longitude) %>% as.matrix
 knb <- dnearneigh(sites, 0, 0.006)
 plot(knb, sites)
+```
 
+```{r, eval=F}
 # Lag the neighbourhood to create other order matrices
 knb <- nblag(knb, 3)
 klist <- list(order0=diag(58),
