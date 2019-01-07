@@ -2,7 +2,8 @@
 title: "Exploratory Data Analysis"
 author: "Logan Wu"
 date: "7 January 2019"
-output: html_document
+output: rmarkdown::github_document
+always_allow_html: yes
 ---
 
 ```{r setup, include=FALSE}
@@ -15,7 +16,11 @@ library(spdep) #easily create weight matrices
 library(starma)
 library(forecast)
 library(ggcorrplot)
+```
 
+## Load data
+
+```{r}
 # read in a manageable portion of the dataset for now
 raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv") %>% head(25000)
 raw.ts[,Date_Time := as.POSIXct(Date_Time, format="%m/%d/%Y %I:%M:%S %p")]
