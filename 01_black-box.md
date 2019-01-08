@@ -8,7 +8,7 @@ Load data
 
 ``` r
 # read in a manageable portion of the dataset for now
-raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv", nrows=100000)
+raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv", nrows=200000)
 raw.ts[,Date_Time := as.POSIXct(Date_Time, format="%m/%d/%Y %I:%M:%S %p")]
 ```
 
@@ -77,56 +77,34 @@ Test RF
 
 ``` r
 library(ranger)
-```
-
-    ## Warning: package 'ranger' was built under R version 3.4.4
-
-``` r
 names(X) = make.names(names(X))
-n.test = 100
+n.test = 500
 X.train = X %>% head(nrow(X) - n.test)
 X.test = X %>% tail(n.test)
 y.test = X.test %>% pull(Hourly_Counts)
+```
 
+Exclude the time and weekday. Purely regressed on the past three hours.
 
+``` r
 rf <- ranger(Hourly_Counts ~ . -Time -Day, data=X.train)
 pred <- predict(rf, X.test)
 plot(log(y.test), log(pred$predictions))
 ```
 
-![](01_black-box_files/figure-markdown_github/unnamed-chunk-3-1.png)
+![](01_black-box_files/figure-markdown_github/unnamed-chunk-4-1.png)
 
 ``` r
 plot(sqrt((y.test-pred$predictions)^2))
 ```
 
-![](01_black-box_files/figure-markdown_github/unnamed-chunk-3-2.png)
+![](01_black-box_files/figure-markdown_github/unnamed-chunk-4-2.png)
 
 ``` r
 print(sum(sqrt((y.test-pred$predictions)^2)))
 ```
 
-    ## [1] 14206.97
-
-``` r
-rf <- ranger(Hourly_Counts ~ ., data=X.train)
-pred <- predict(rf, X.test)
-plot(log(y.test), log(pred$predictions))
-```
-
-![](01_black-box_files/figure-markdown_github/unnamed-chunk-3-3.png)
-
-``` r
-plot(sqrt((y.test-pred$predictions)^2))
-```
-
-![](01_black-box_files/figure-markdown_github/unnamed-chunk-3-4.png)
-
-``` r
-print(sum(sqrt((y.test-pred$predictions)^2)))
-```
-
-    ## [1] 14724.11
+    ## [1] 48947.44
 
 ``` r
 plt.df = data.frame(actual=y.test, pred=pred$predictions) %>%
@@ -136,6 +114,38 @@ ggplot(plt.df, aes(x=id, y=value, color=method)) +
   geom_line()
 ```
 
-![](01_black-box_files/figure-markdown_github/unnamed-chunk-3-5.png)
+![](01_black-box_files/figure-markdown_github/unnamed-chunk-4-3.png)
 
-Early indications are good. Comparison required against univariate TS is needed.
+Introduce time and weekday. Would expect it to improve.
+
+``` r
+rf2 <- ranger(Hourly_Counts ~ ., data=X.train)
+pred2 <- predict(rf2, X.test)
+plot(log(y.test), log(pred2$predictions))
+```
+
+![](01_black-box_files/figure-markdown_github/unnamed-chunk-5-1.png)
+
+``` r
+plot(sqrt((y.test-pred2$predictions)^2))
+```
+
+![](01_black-box_files/figure-markdown_github/unnamed-chunk-5-2.png)
+
+``` r
+print(sum(sqrt((y.test-pred2$predictions)^2)))
+```
+
+    ## [1] 44820.53
+
+``` r
+plt.df2 = data.frame(actual=y.test, pred=pred2$predictions) %>%
+  mutate(id = row_number()) %>%
+  gather(key="method", value="value", -id)
+ggplot(plt.df2, aes(x=id, y=value, color=method)) +
+  geom_line()
+```
+
+![](01_black-box_files/figure-markdown_github/unnamed-chunk-5-3.png)
+
+Note: ID is just index, not time. Early indications are good but needs proper model comparison. Comparison required against univariate TS is needed.

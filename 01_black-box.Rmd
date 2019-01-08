@@ -22,7 +22,7 @@ library(ggcorrplot)
 
 ```{r}
 # read in a manageable portion of the dataset for now
-raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv", nrows=100000)
+raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv", nrows=200000)
 raw.ts[,Date_Time := as.POSIXct(Date_Time, format="%m/%d/%Y %I:%M:%S %p")]
 ```
 
@@ -62,19 +62,16 @@ X %>% head
 ```{r}
 library(ranger)
 names(X) = make.names(names(X))
-n.test = 100
+n.test = 500
 X.train = X %>% head(nrow(X) - n.test)
 X.test = X %>% tail(n.test)
 y.test = X.test %>% pull(Hourly_Counts)
+```
 
+Exclude the time and weekday. Purely regressed on the past three hours.
 
+```{r}
 rf <- ranger(Hourly_Counts ~ . -Time -Day, data=X.train)
-pred <- predict(rf, X.test)
-plot(log(y.test), log(pred$predictions))
-plot(sqrt((y.test-pred$predictions)^2))
-print(sum(sqrt((y.test-pred$predictions)^2)))
-
-rf <- ranger(Hourly_Counts ~ ., data=X.train)
 pred <- predict(rf, X.test)
 plot(log(y.test), log(pred$predictions))
 plot(sqrt((y.test-pred$predictions)^2))
@@ -87,5 +84,21 @@ ggplot(plt.df, aes(x=id, y=value, color=method)) +
   geom_line()
 ```
 
+Introduce time and weekday. Would expect it to improve.
+
+```{r}
+rf2 <- ranger(Hourly_Counts ~ ., data=X.train)
+pred2 <- predict(rf2, X.test)
+plot(log(y.test), log(pred2$predictions))
+plot(sqrt((y.test-pred2$predictions)^2))
+print(sum(sqrt((y.test-pred2$predictions)^2)))
+
+plt.df2 = data.frame(actual=y.test, pred=pred2$predictions) %>%
+  mutate(id = row_number()) %>%
+  gather(key="method", value="value", -id)
+ggplot(plt.df2, aes(x=id, y=value, color=method)) +
+  geom_line()
+```
+
 Note: ID is just index, not time.
-Early indications are good. Comparison required against univariate TS is needed.
+Early indications are good but needs proper model comparison. Comparison required against univariate TS is needed.
