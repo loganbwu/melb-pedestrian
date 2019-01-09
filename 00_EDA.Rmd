@@ -12,7 +12,7 @@ library(tidyverse)
 library(data.table)
 library(sf)
 library(leaflet)
-library(spdep) #easily create weight matrices
+library(spdep)                     # easily create weight matrices
 library(starma)
 library(forecast)
 library(ggcorrplot)
@@ -74,9 +74,15 @@ Spatial correlations have varying levels -- factors other than time of day/year 
 Fit a simple time series without any cross-correlation
 
 ```{r}
-result <- lapply(data.ts2, function(x) forecast(auto.arima(x)))
-plot(result[[1]])
+# arima.result = auto.arima(data.ts2[,1])
+arima.result = arima(data.ts2[,1], order=c(1,1,1),
+                     seasonal=list(order=c(0,1,1), period=24))
+# result <- lapply(data.ts2, function(x) forecast(auto.arima(x), h=120))
+# plot(result[[1]])
+plot(forecast(arima.result, h=120))
 ```
+
+# Packages for spatio-temporal regression
 
 ## lagsarlm (Spatial Simultaneous Autoregressive Lag Model Estimation)
 
@@ -84,22 +90,107 @@ lagsarlm is for spatial effects and does not help with time series.
 
 ## SpatioTemporal
 
-
+Tutorial script is in 02_spTimer.Rmd
 
 ## Multiple ARIMA
 
 MARIMA requires connectivity between observation nodes to be specified. The data contains 58 sensors, but only 18 geographic locations are available with multiple sensors per location. Sensors have to be manually assigned a coordinate.
 
+# Seasonal differencing
 
-
+The data contains both daily and weekly seasonality. Some R functions do not handle multiple seasonalities. We can pre-process to remove the known seasonalities.
 
 ```{r}
-# marima.result = marima(data.ts2, ar.pattern=2)
+test1 = data.frame(y=data.ts2[,1]) %>%
+  mutate(t = row_number(),
+         y.diff = y - lag(y, 24),
+         y.diff2 = y.diff - lag(y.diff, 168))
+test = test1 %>%
+  gather(key="key", value="value", -t)
+
+ggplot(test, aes(x=t, y=value, color=key)) +
+  geom_line()
 ```
 
-Ignore this: example from website
+The final differenced data appears stationary. Spikes could be due to public holidays, which will be ignored for now. Intuitively, we also need at least a first differencing (AR1) but this can be done in the ARIMA fit.
 
 ```{r}
+result = auto.arima(test1$y.diff2)
+result.forecast = forecast(result, h=200)$mean
+y.diff2 = c(test1$y.diff2, result.forecast)
+y.diff2[is.na(y.diff2)] = 0
+
+y.diff = as.numeric(test1$y.diff)
+y.diff[is.na(y.diff)] = 0
+for (i in (24+169):length(y.diff2)) {
+  y.diff[i] = y.diff[i-168] + y.diff2[i]
+}
+y = as.numeric(test1$y)
+for (i in 25:length(y.diff)) {
+  y[i] = y[i-24] + y.diff[i]
+}
+
+seasonal.result = data.frame(y, y.diff, y.diff2) %>%
+  mutate(t=row_number(),
+         prediction=t>nrow(test1)) %>%
+  gather(key="key", value="value", -t, -prediction)
+ggplot(seasonal.result, aes(x=t, y=value, color=prediction)) +
+  geom_line() +
+  facet_grid(key~.)
+```
+
+One issue is that pedestrian counts should be non-negative whereas ARIMA models are unbounded (although no issues are seen in this example). Perhaps a transformation will help.
+
+```{r}
+pacf(test1$y, lag.max=200)
+pacf(test1$y.diff, lag.max=200, na.action=na.pass)
+pacf(test1$y.diff2, na.action=na.pass)
+```
+
+Despite differencing, there remains a large partial autocorrelation with 24 hours. However, an AR(1) model is probably still the most appropriate on the differenced data.
+
+```{r}
+# experiment on logged series
+# offset of 1 to keep log supported
+test2 = data.frame(logy=log(data.ts2[,1]+1)) %>%
+  mutate(t = row_number(),
+         logy.diff = logy - lag(logy, 24),
+         logy.diff2 = logy.diff - lag(logy.diff, 168))
+test = test1 %>%
+  gather(key="key", value="value", -t)
+
+result = auto.arima(test2$logy.diff2)
+result.forecast = forecast(result, h=200)$mean
+logy.diff2 = c(test2$logy.diff2, result.forecast)
+logy.diff2[is.na(logy.diff2)] = 0
+
+logy.diff = as.numeric(test2$logy.diff)
+logy.diff[is.na(logy.diff)] = 0
+for (i in (24+169):length(logy.diff2)) {
+  logy.diff[i] = logy.diff[i-168] + logy.diff2[i]
+}
+logy = as.numeric(test2$logy)
+for (i in 25:length(logy.diff)) {
+  logy[i] = logy[i-24] + logy.diff[i]
+}
+
+seasonal.result = data.frame(logy, logy.diff, logy.diff2) %>%
+  mutate(y=exp(logy)-1,
+         t=row_number(),
+         prediction=t>nrow(test2)) %>%
+  gather(key="key", value="value", -t, -prediction)
+ggplot(seasonal.result, aes(x=t, y=value, color=prediction)) +
+  geom_line() +
+  facet_grid(key~., scales="free_y")
+```
+
+The final series looks correct.
+
+Issue: No confidence intervals. A Bayesian approach may be required.
+
+Ignore below: example from website
+
+```{r, eval=F}
 # Create a 5x5 regular grid which will be our lattice
 sites <- matrix(0, 25, 2)
 for (i in 1:5) {

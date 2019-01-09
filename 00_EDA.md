@@ -8,7 +8,7 @@ Load data
 
 ``` r
 # read in a manageable portion of the dataset for now
-raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv") %>% head(25000)
+raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv", nrows=25000)
 raw.ts[,Date_Time := as.POSIXct(Date_Time, format="%m/%d/%Y %I:%M:%S %p")]
 
 raw.geo <- read.csv("data/Pedestrian_sensor_locations.csv")
@@ -73,8 +73,18 @@ plot(result[[1]])
 
 ![](00_EDA_files/figure-markdown_github/unnamed-chunk-6-1.png)
 
+lagsarlm (Spatial Simultaneous Autoregressive Lag Model Estimation)
+-------------------------------------------------------------------
+
+lagsarlm is for spatial effects and does not help with time series.
+
+SpatioTemporal
+--------------
+
 Multiple ARIMA
 --------------
+
+MARIMA requires connectivity between observation nodes to be specified. The data contains 58 sensors, but only 18 geographic locations are available with multiple sensors per location. Sensors have to be manually assigned a coordinate.
 
 ``` r
 # marima.result = marima(data.ts2, ar.pattern=2)
