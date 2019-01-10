@@ -98,7 +98,7 @@ MARIMA requires connectivity between observation nodes to be specified. The data
 
 # Seasonal differencing
 
-The data contains both daily and weekly seasonality. Some R functions do not handle multiple seasonalities. We can pre-process to remove the known seasonalities.
+The data contains both daily and weekly seasonality. Some R functions, e.g. arima, do not handle multiple seasonalities. We can pre-process to remove the known seasonalities.
 
 ```{r}
 test1 = data.frame(y=data.ts2[,1]) %>%
@@ -112,7 +112,7 @@ ggplot(test, aes(x=t, y=value, color=key)) +
   geom_line()
 ```
 
-The final differenced data appears stationary. Spikes could be due to public holidays, which will be ignored for now. Intuitively, we also need at least a first differencing (AR1) but this can be done in the ARIMA fit.
+The final differenced data is mostly stationary. Spikes could be due to public holidays, which will be ignored for now. Intuitively, we also need at least a first differencing (AR1) but this can be done in the ARIMA fit.
 
 ```{r}
 result = auto.arima(test1$y.diff2)
@@ -138,6 +138,8 @@ ggplot(seasonal.result, aes(x=t, y=value, color=prediction)) +
   geom_line() +
   facet_grid(key~.)
 ```
+
+auto.arima has fit an ARIMA(5,0,0) model.
 
 One issue is that pedestrian counts should be non-negative whereas ARIMA models are unbounded (although no issues are seen in this example). Perhaps a transformation will help.
 

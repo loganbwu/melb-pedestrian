@@ -7,8 +7,7 @@ always_allow_html: yes
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo=T, cache=T)
-library(tidyverse)
+knitr::opts_chunk$set(echo=T, cache=F)
 library(data.table)
 library(sf)
 library(leaflet)
@@ -16,13 +15,15 @@ library(spdep) #easily create weight matrices
 library(starma)
 library(forecast)
 library(ggcorrplot)
+library(tidyverse)
+library(plotly)
 ```
 
 ## Load data
 
 ```{r}
 # read in a manageable portion of the dataset for now
-raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv")
+raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv", nrows=20000)
 raw.ts[,Date_Time := as.POSIXct(Date_Time, format="%m/%d/%Y %I:%M:%S %p")]
 ```
 
@@ -44,19 +45,19 @@ Could include:
 n = 3
 
 data.ts = raw.ts %>%
-  select(Date_Time, Sensor_Name, Hourly_Counts, Time, Day) %>%
-  spread(key=Sensor_Name, value=Hourly_Counts, -c(Time:Day))# %>%
-  select(-Date_Time) %>%
+  dplyr::select(Date_Time, Sensor_Name, Hourly_Counts, Time, Day) %>%
+  spread(key=Sensor_Name, value=Hourly_Counts) %>%
+  # dplyr::select(-Date_Time) %>%
   mutate(Day = factor(Day)) %>%
   as.ts %>%
   na.contiguous %>% # analysis does not include missing data
   as.data.frame
-data.ts = data.ts[,1:4]
+data.ts = data.ts[,1:7]
 # data.lag = data.ts
 
 lags = list()
 for (i in 1:n) {
-  lags[[i]] = data.ts %>% select(-Time, -Day) %>% mutate_all(function (x) lead(x, i)) %>%
+  lags[[i]] = data.ts %>% select(-Time, -Day, -Date_Time) %>% mutate_all(function (x) lead(x, i)) %>%
   rename_all(function(x) paste0(x,".lag", i))
 }
 lags = do.call(cbind, lags)
@@ -64,10 +65,11 @@ lags = do.call(cbind, lags)
 # append the lags onto each current measurement
 X = list()
 for (i in 1:(ncol(data.ts)-n+1)) {
-  X[[i]] = cbind(Hourly_Counts=data.ts[,i+n-1], Day=data.ts[,n-1], Time=data.ts[,1], Sensor_Name=names(data.ts)[i+n-1], lags)
+  X[[i]] = cbind(Hourly_Counts=data.ts[,i+n-1], Day=data.ts$Day, Time=data.ts$Time, Date_Time=data.ts$Date_Time, Sensor_Name=names(data.ts)[i+n], lags)
 }
 X = do.call(rbind, X) %>%
-  drop_na()
+  drop_na() %>%
+  arrange(Date_Time)
 X %>% head
 ```
 
@@ -85,8 +87,9 @@ y.test = X.test %>% pull(Hourly_Counts)
 Exclude the time and weekday. Purely regressed on the past three hours.
 
 ```{r}
-rf <- ranger(Hourly_Counts ~ . -Time -Day, data=X.train)
+rf <- ranger(Hourly_Counts ~ . -Time -Day -Date_Time, data=X.train, importance="permutation")
 pred <- predict(rf, X.test)
+X.test$pred = pred$predictions
 plot(log(y.test), log(pred$predictions))
 plot(sqrt((y.test-pred$predictions)^2))
 print(sum(sqrt((y.test-pred$predictions)^2)))
@@ -96,22 +99,30 @@ plt.df = data.frame(actual=y.test, pred=pred$predictions) %>%
   gather(key="method", value="value", -id)
 ggplot(plt.df, aes(x=id, y=value, color=method)) +
   geom_line()
+
+ggplot(X.test, aes(x=Date_Time, y=Hourly_Counts)) +
+  geom_line(color="red") +
+  geom_line(aes(y=pred), color="blue") +
+  geom_line(data=X.train, aes(y=Hourly_Counts)) +
+  facet_grid(Sensor_Name~.)
 ```
 
 Introduce time and weekday. Would expect it to improve.
 
 ```{r}
-rf2 <- ranger(Hourly_Counts ~ ., data=X.train)
+rf2 <- ranger(Hourly_Counts ~ . -Date_Time, data=X.train, importance="permutation")
 pred2 <- predict(rf2, X.test)
+X.test$pred2 <- pred2$predictions
 plot(log(y.test), log(pred2$predictions))
-plot(sqrt((y.test-pred2$predictions)^2))
+plot(sqrt((y.test-pred2$predictions)^2), type="l")
 print(sum(sqrt((y.test-pred2$predictions)^2)))
 
-plt.df2 = data.frame(actual=y.test, pred=pred2$predictions) %>%
-  mutate(id = row_number()) %>%
-  gather(key="method", value="value", -id)
-ggplot(plt.df2, aes(x=id, y=value, color=method)) +
-  geom_line()
+ggplot(X.test, aes(x=Date_Time, y=Hourly_Counts)) +
+  geom_line(color="red") +
+  geom_line(aes(y=pred2), color="blue") +
+  geom_line(data=X.train, aes(y=Hourly_Counts)) +
+  facet_grid(Sensor_Name~.)
+
 ```
 
 Note: ID is just index, not time.
