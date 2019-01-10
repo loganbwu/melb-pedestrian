@@ -2,7 +2,8 @@
 title: "02_spTimer"
 author: "Logan Wu"
 date: "1/9/2019"
-output: html_document
+output: rmarkdown::github_document
+always_allow_html: yes
 ---
 
 From https://github.com/cran/spTimer/blob/master/demo/nyExample.R
