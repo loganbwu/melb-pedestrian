@@ -78,13 +78,13 @@ X %>% head
 ```{r}
 library(ranger)
 names(X) = make.names(names(X))
-n.test = 500
+n.test = 1000
 X.train = X %>% head(nrow(X) - n.test)
 X.test = X %>% tail(n.test)
 y.test = X.test %>% pull(Hourly_Counts)
 ```
 
-Exclude the time and weekday. Purely regressed on the past three hours.
+Exclude the time and weekday from the model. Purely regressed on lags from the past three hours.
 
 ```{r}
 rf <- ranger(Hourly_Counts ~ . -Time -Day -Date_Time, data=X.train, importance="permutation")
@@ -120,4 +120,5 @@ ggplot(X.test, aes(x=Date_Time, y=Hourly_Counts)) +
 ```
 
 Note: ID is just index, not time.
-Early indications are good but needs proper model comparison. Comparison required against univariate TS is needed.
+
+Early indications are good but needs proper model comparison. Comparison required against univariate TS is needed. Also needs to incorporate uncertainty.

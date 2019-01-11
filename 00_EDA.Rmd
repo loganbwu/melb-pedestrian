@@ -192,7 +192,7 @@ Issue: No confidence intervals. A Bayesian approach may be required.
 
 Ignore below: example from website
 
-```{r, eval=F}
+```{r}
 # Create a 5x5 regular grid which will be our lattice
 sites <- matrix(0, 25, 2)
 for (i in 1:5) {
@@ -240,8 +240,6 @@ summary(model)
 stcor.test(model$residuals, klist, fitdf=4)
 stacf(model$residuals, klist)
 stpacf(model$residuals, klist)
-
-# starma(matrix.ts, c(diag(18)), ar=0, ma=0)
 ```
 
 ## Process geographic data
@@ -253,30 +251,51 @@ data.geo = raw.geo %>%
   # st_as_sf(coords=c("Latitude", "Longitude")) %>%
   select(-Status, -Upload.Date, -Geometry, -Location.Type)
 
-leaflet() %>%
-  addProviderTiles(providers$CartoDB.Positron) %>%
-  addCircleMarkers(data.geo$Longitude, data.geo$Latitude,
-                   label=data.geo$Sensor.Description,
-                   weight=0, radius=4, fillOpacity=0.5)
+# leaflet() %>%
+#   addProviderTiles(providers$CartoDB.Positron) %>%
+#   addCircleMarkers(data.geo$Longitude, data.geo$Latitude,
+#                    label=data.geo$Sensor.Description,
+#                    weight=0, radius=4, fillOpacity=0.5)
 ```
 
 ## Estimate neighborhoods based on the example
 
 ```{r}
-sites = data.geo %>% select(Latitude, Longitude) %>% as.matrix
-knb <- dnearneigh(sites, 0, 0.006)
-plot(knb, sites)
-```
+sites = data.geo %>% 
+  select(Sensor.Description, Latitude, Longitude) %>%
+  filter(Sensor.Description %in% colnames(data.ts2)) %>%
+  st_as_sf(coords = c("Longitude", "Latitude")) %>%
+  filter(Sensor.Description %in% colnames(data.ts2)) %>%
+  arrange(Sensor.Description)
+  
+# knb <- dnearneigh(as_Spatial(sites), 0, 0.01)
+knb <- knearneigh(as_Spatial(sites), 5) %>% knn2nb
+plot(knb, st_coordinates(sites))
 
-```{r, eval=F}
 # Lag the neighbourhood to create other order matrices
 knb <- nblag(knb, 3)
-klist <- list(order0=diag(58),
+klist <- list(order0=diag(17),
            order1=nb2mat(knb[[1]]),
-           order2=nb2mat(knb[[2]]),
-           order3=nb2mat(knb[[3]]))
+           order2=nb2mat(knb[[2]]))
 
 # Identify the process
 stacf(data.ts2, klist)
 stpacf(data.ts2, klist)
+
+# Estimate the process
+ar <- matrix(c(1, 1, 1, 0), 2, 2)
+ma <- matrix(c(0, 1), 1, 2)
+model <- starma(data.ts2, klist, ar, ma)
+model
+summary(model)
+
+# star <- star[101:200,]	# Remove first observations
+# star <- stcenter(star)	# Center and scale the dataset
+
+# Diagnose the process
+stcor.test(model$residuals, klist, fitdf=4)
+stacf(model$residuals, klist)
+stpacf(model$residuals, klist)
 ```
+
+We are interested in the partial autocorrelation - the dependence on a certain term given the other correlations (note: check this). They are generally weak.
