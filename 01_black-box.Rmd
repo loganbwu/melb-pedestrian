@@ -17,13 +17,15 @@ library(forecast)
 library(ggcorrplot)
 library(tidyverse)
 library(plotly)
+library(xtable)
+library(knitr)
 ```
 
 ## Load data
 
 ```{r}
 # read in a manageable portion of the dataset for now
-raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv", nrows=20000)
+raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv", nrows=50000)
 raw.ts[,Date_Time := as.POSIXct(Date_Time, format="%m/%d/%Y %I:%M:%S %p")]
 ```
 
@@ -42,35 +44,46 @@ Could include:
 - Public holiday
 
 ```{r}
-n = 3
+metadata = c("Date_Time", "Sensor_Name", "Time", "Day")
+nlag = 3
 
 data.ts = raw.ts %>%
-  dplyr::select(Date_Time, Sensor_Name, Hourly_Counts, Time, Day) %>%
+  dplyr::select(metadata, Hourly_Counts) %>%
   spread(key=Sensor_Name, value=Hourly_Counts) %>%
   # dplyr::select(-Date_Time) %>%
   mutate(Day = factor(Day)) %>%
   as.ts %>%
   na.contiguous %>% # analysis does not include missing data
-  as.data.frame
-data.ts = data.ts[,1:7]
+  as.data.frame %>%
+  mutate(Date_Time=as.POSIXct(Date_Time, origin="1970-01-01"))
+data.ts = data.ts[,1:12]
+nloc = ncol(data.ts) - length(metadata)
+locs = setdiff(colnames(data.ts), metadata)
 # data.lag = data.ts
 
 lags = list()
-for (i in 1:n) {
-  lags[[i]] = data.ts %>% select(-Time, -Day, -Date_Time) %>% mutate_all(function (x) lead(x, i)) %>%
-  rename_all(function(x) paste0(x,".lag", i))
+for (i in 1:nlag) {
+  lags[[i]] = data.ts %>%
+    select(-one_of(metadata)) %>%
+    mutate_all(function (x) lead(x, i)) %>%
+    rename_all(function(x) paste0(x,".lag", i))
 }
 lags = do.call(cbind, lags)
 
 # append the lags onto each current measurement
 X = list()
-for (i in 1:(ncol(data.ts)-n+1)) {
-  X[[i]] = cbind(Hourly_Counts=data.ts[,i+n-1], Day=data.ts$Day, Time=data.ts$Time, Date_Time=data.ts$Date_Time, Sensor_Name=names(data.ts)[i+n], lags)
+for (j in 1:nloc) {
+  X[[j]] = cbind(Hourly_Counts=data.ts[,locs[j]], 
+                 Day=data.ts$Day, 
+                 Time=data.ts$Time, 
+                 Date_Time=data.ts$Date_Time,
+                 Sensor_Name=locs[j],
+                 lags)
 }
 X = do.call(rbind, X) %>%
   drop_na() %>%
   arrange(Date_Time)
-X %>% head
+X %>% head %>% kable
 ```
 
 ## Test RF
@@ -78,7 +91,7 @@ X %>% head
 ```{r}
 library(ranger)
 names(X) = make.names(names(X))
-n.test = 1000
+n.test = round(nrow(X)) * 0.2
 X.train = X %>% head(nrow(X) - n.test)
 X.test = X %>% tail(n.test)
 y.test = X.test %>% pull(Hourly_Counts)
@@ -87,12 +100,12 @@ y.test = X.test %>% pull(Hourly_Counts)
 Exclude the time and weekday from the model. Purely regressed on lags from the past three hours.
 
 ```{r}
-rf <- ranger(Hourly_Counts ~ . -Time -Day -Date_Time, data=X.train, importance="permutation")
+rf <- ranger(Hourly_Counts ~ . -Time -Day -Date_Time, data=X.train)
 pred <- predict(rf, X.test)
 X.test$pred = pred$predictions
+plot(y.test, pred$predictions)
 plot(log(y.test), log(pred$predictions))
-plot(sqrt((y.test-pred$predictions)^2))
-print(sum(sqrt((y.test-pred$predictions)^2)))
+cat("RMSE", sqrt(sum((y.test-pred$predictions)^2)))
 
 ggplot(X.test, aes(x=Date_Time, y=Hourly_Counts)) +
   geom_line(color="red") +
@@ -104,12 +117,12 @@ ggplot(X.test, aes(x=Date_Time, y=Hourly_Counts)) +
 Introduce time and weekday. Would expect it to improve.
 
 ```{r}
-rf2 <- ranger(Hourly_Counts ~ . -Date_Time, data=X.train, importance="permutation")
+rf2 <- ranger(Hourly_Counts ~ . -Date_Time, data=X.train)
 pred2 <- predict(rf2, X.test)
 X.test$pred2 <- pred2$predictions
+plot(y.test, pred2$predictions)
 plot(log(y.test), log(pred2$predictions))
-plot(sqrt((y.test-pred2$predictions)^2), type="l")
-print(sum(sqrt((y.test-pred2$predictions)^2)))
+cat("RMSE:", sqrt(sum((y.test-pred2$predictions)^2)))
 
 ggplot(X.test, aes(x=Date_Time, y=Hourly_Counts)) +
   geom_line(color="red") +
@@ -119,6 +132,39 @@ ggplot(X.test, aes(x=Date_Time, y=Hourly_Counts)) +
 
 ```
 
-Note: ID is just index, not time.
-
 Early indications are good but needs proper model comparison. Comparison required against univariate TS is needed. Also needs to incorporate uncertainty.
+
+## Cross-correlation importance
+
+Make separate RFs for each location, and observe the variable importance of cross-correlations.
+
+```{r}
+Sensor_Names = unique(X$Sensor_Name)
+x = list()
+rfs = list()
+for (s_n in Sensor_Names) {
+  x[[s_n]] = X.train %>% filter(Sensor_Name==s_n)
+  rfs[[s_n]] = ranger(Hourly_Counts ~ . -Sensor_Name -Date_Time,
+                      data=x[[s_n]], importance="permutation")
+}
+```
+
+```{r}
+for (s_n in Sensor_Names) {
+  g = ggplot(data.frame(importance=importance(rfs[[s_n]])) %>%
+           rownames_to_column("variable"),
+         aes(x=variable, y=importance, fill=importance)) + 
+        geom_bar(stat="identity")+ coord_flip()+
+        ylab("Variable Importance")+
+        xlab("")+
+        ggtitle(paste("Importance for", s_n))+
+        guides(fill=F)+
+        scale_fill_gradient(low="red", high="blue")
+  print(g)
+}
+```
+
+Permutation feature importance: Determines the marginal impact on performance compared to when one feature is randomised (permuted).
+```{r, eval=F}
+importance_pvalues(rfs[[1]], "altmann", formula=formula("Hourly_Counts ~ . - Sensor_Name - Date_Time"), data=x[[s_n]], num.permutations=10)
+```

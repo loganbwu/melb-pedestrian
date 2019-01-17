@@ -1,0 +1,115 @@
+---
+title: "Vector Auto Regression"
+author: "Logan Wu"
+date: "1/16/2019"
+output: rmarkdown::github_document
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=T, cache=T)
+library(tidyverse)
+library(data.table)
+library(sf)
+library(leaflet)
+library(spdep)                     # easily create weight matrices
+library(starma)
+library(forecast)
+library(ggcorrplot)
+```
+
+## Load data
+
+```{r}
+# read in a manageable portion of the dataset for now
+raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv", nrows=20000)
+raw.ts[,Date_Time := as.POSIXct(Date_Time, format="%m/%d/%Y %I:%M:%S %p")]
+
+raw.geo <- read.csv("data/Pedestrian_sensor_locations.csv")
+```
+
+## Process TS data
+
+```{r}
+data.ts = raw.ts %>%
+  select(-ID) %>%
+  select(Date_Time, Sensor_Name, Hourly_Counts) %>%
+  spread(key=Sensor_Name, value=Hourly_Counts) %>%
+  select(-Date_Time) %>%
+  as.ts %>%
+  na.contiguous # analysis does not include missing data
+  # stcenter# %>%
+```
+
+## Perform differencing
+
+Confirm that each sensor series is stationary as we would expect
+
+```{r}
+for (i in seq_along(colnames(data.ts))) {
+  print(ndiffs(data.ts[,i], test="adf"))
+}
+```
+
+Test to perform seasonal differencing. Weekly differencing only seems to give the best PACF plot.
+
+```{r, fig.height=3}
+test1 = data.ts %>%
+  diff(lag=168)
+plot(test1[,2])
+pacf(test1[,2])
+
+test2 = data.ts %>%
+  diff(lag=168) %>%
+  diff(lag=24)
+plot(test2[,2])
+pacf(test2[,2])
+```
+
+Split into train/test sets. Later this can turn into a rolling train/test.
+
+```{r}
+frac = 0.8
+X.train = head(test2, round(nrow(test2)*frac))
+X.test = tail(test2, round(nrow(test2)*(1-frac)))
+
+
+```
+
+Perform vector autoregression. Assume the moving average component is not necessary because the series is stationary. [Useful link](https://stats.stackexchange.com/questions/191851/var-forecasting-methodology)
+
+```{r}
+library(vars)
+
+# lag optimisation
+VARselect(test2, lag.max=10, type="both", season=168)
+
+myvar = VAR(test2, p=2, season=168)
+
+serial.test(myvar, lags.pt=10, type="PT.asymptotic")
+arch.test(myvar, lags.multi=10)
+# summary(myvar)
+```
+
+Predictions
+
+```{r}
+prd <- predict(myvar, n.ahead = 168*2)
+fcst = prd$fcst$Webb.Bridge
+
+plt.df1 = data.frame(obs = data.ts[,"Webb Bridge"]) %>%
+  mutate(t = as.numeric(rownames(.)))
+plt.df2 = data.frame(diff = fcst[,1]) %>%
+  mutate(t = as.numeric(rownames(.))) %>%
+  mutate(t = t + nrow(plt.df1))
+plt.df3 = data.frame(fcst = diffinv(fcst[,1], lag=168, xi=tail(data.ts[,"Webb Bridge"], 168))) %>%
+  tail(168*2) %>%
+  mutate(t = as.numeric(rownames(.))) %>%
+  mutate(t = t + min(plt.df2$t) - 168)
+
+plt.df = plt.df1 %>% full_join(plt.df2) %>% full_join(plt.df3) %>%
+  gather(key="key", value="value", -t)
+
+ggplot(plt.df, aes(x=t, y=value, color=key)) +
+  geom_line()
+```
