@@ -64,7 +64,7 @@ locs = setdiff(colnames(data.ts), metadata)
 lags = list()
 for (i in 1:nlag) {
   lags[[i]] = data.ts %>%
-    select(-one_of(metadata)) %>%
+    dplyr::select(-one_of(metadata)) %>%
     mutate_all(function (x) lead(x, i)) %>%
     rename_all(function(x) paste0(x,".lag", i))
 }

@@ -8,7 +8,6 @@ always_allow_html: yes
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo=T, cache=T)
-library(tidyverse)
 library(data.table)
 library(sf)
 library(leaflet)
@@ -16,29 +15,32 @@ library(spdep)                     # easily create weight matrices
 library(starma)
 library(forecast)
 library(ggcorrplot)
+library(tidyverse)
+library(xts)
+library(plotly)
 ```
 
 ## Load data
 
 ```{r}
 # read in a manageable portion of the dataset for now
-raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv", nrows=20000)
+raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv", nrows=50000)
 raw.ts[,Date_Time := as.POSIXct(Date_Time, format="%m/%d/%Y %I:%M:%S %p")]
-
-raw.geo <- read.csv("data/Pedestrian_sensor_locations.csv")
 ```
 
 ## Process TS data
 
 ```{r}
 data.ts = raw.ts %>%
-  select(-ID) %>%
-  select(Date_Time, Sensor_Name, Hourly_Counts) %>%
+  dplyr::select(-ID) %>%
+  dplyr::select(Date_Time, Sensor_Name, Hourly_Counts) %>%
   spread(key=Sensor_Name, value=Hourly_Counts) %>%
-  select(-Date_Time) %>%
-  as.ts %>%
+  # dplyr::select(-Date_Time) %>%
+  as.xts %>%
+  as.zoo %>%
   na.contiguous # analysis does not include missing data
   # stcenter# %>%
+names(data.ts) = make.names(names(data.ts))
 ```
 
 ## Perform differencing
@@ -54,26 +56,21 @@ for (i in seq_along(colnames(data.ts))) {
 Test to perform seasonal differencing. Weekly differencing only seems to give the best PACF plot.
 
 ```{r, fig.height=3}
-test1 = data.ts %>%
-  diff(lag=168)
-plot(test1[,2])
-pacf(test1[,2])
-
-test2 = data.ts %>%
-  diff(lag=168) %>%
-  diff(lag=24)
-plot(test2[,2])
-pacf(test2[,2])
+# data.diff = data.ts %>%
+#   diff(lag=168)
+# plot(data.diff[,2])
+# pacf(data.diff[,2])
 ```
 
 Split into train/test sets. Later this can turn into a rolling train/test.
 
 ```{r}
 frac = 0.8
-X.train = head(test2, round(nrow(test2)*frac))
-X.test = tail(test2, round(nrow(test2)*(1-frac)))
+X.train = head(data.ts, round(nrow(data.ts)*frac))
+X.test = tail(data.ts, round(nrow(data.ts)*(1-frac)))
 
-
+X.train.diff = X.train %>%
+  diff(lag=168)
 ```
 
 Perform vector autoregression. Assume the moving average component is not necessary because the series is stationary. [Useful link](https://stats.stackexchange.com/questions/191851/var-forecasting-methodology)
@@ -82,34 +79,77 @@ Perform vector autoregression. Assume the moving average component is not necess
 library(vars)
 
 # lag optimisation
-VARselect(test2, lag.max=10, type="both", season=168)
+VARselect(X.train.diff, lag.max=10, type="both", season=168)
 
-myvar = VAR(test2, p=2, season=168)
+myvar = VAR(X.train.diff, p=2, season=168)
 
 serial.test(myvar, lags.pt=10, type="PT.asymptotic")
-arch.test(myvar, lags.multi=10)
+# arch.test(myvar, lags.multi=10)
 # summary(myvar)
 ```
 
 Predictions
 
 ```{r}
-prd <- predict(myvar, n.ahead = 168*2)
-fcst = prd$fcst$Webb.Bridge
+prd <- predict(myvar, n.ahead = nrow(X.test))
+fcst = diffinv(prd$fcst$Webb.Bridge[,1], lag=168, xi=tail(X.train[,"Webb.Bridge"], 168)) %>%
+  tail(nrow(X.test))
+fcst.all = lapply(prd$fcst,
+                  function(X) X[,"fcst"]
+  )
+fcst.all = sapply(names(prd$fcst), function(N) diffinv(fcst.all[[N]],
+                                                       lag=168,
+                                                       xi=tail(X.train[,N], 168)
+                                                       )
+                  ) %>%
+  as.data.frame %>%
+  tail(nrow(X.test)) %>%
+  mutate(time = index(X.test)) %>%
+  gather(key="location", value="value", -time)
+  
+X.train.all = X.train %>%
+  as.data.frame %>%
+  mutate(time = as.POSIXct(rownames(.)),
+         key="train") %>%
+  gather(key="location", value="value", -time, -key)
+X.obs.all = X.test %>%
+  as.data.frame %>%
+  mutate(time = as.POSIXct(rownames(.)),
+         key="obs") %>%
+  gather(key="location", value="value", -time, -key)
+X.fcst.all = fcst.all %>%
+  mutate(key="fcst") %>%
+  gather(key="location", value="value", -time, -key)
+X.all = X.train.all %>% rbind(X.obs.all) %>% rbind(X.fcst.all) %>%
+  mutate(key=factor(key), location=factor(location)) %>%
+  arrange(time)
 
-plt.df1 = data.frame(obs = data.ts[,"Webb Bridge"]) %>%
-  mutate(t = as.numeric(rownames(.)))
-plt.df2 = data.frame(diff = fcst[,1]) %>%
-  mutate(t = as.numeric(rownames(.))) %>%
-  mutate(t = t + nrow(plt.df1))
-plt.df3 = data.frame(fcst = diffinv(fcst[,1], lag=168, xi=tail(data.ts[,"Webb Bridge"], 168))) %>%
-  tail(168*2) %>%
-  mutate(t = as.numeric(rownames(.))) %>%
-  mutate(t = t + min(plt.df2$t) - 168)
+# plt.train = data.frame(train=X.train[,"Webb.Bridge"]) %>%
+#   mutate(time = as.POSIXct(rownames(.))) %>%
+#   gather(key="key", value="value", -time) %>%
+#   tail(nrow(X.test)*1.5) # arbitrary for plotting
+# 
+# plt.test = data.frame(fcst.all[,"Webb.Bridge"], observed=X.test[,"Webb.Bridge"]) %>%
+#   mutate(time = as.POSIXct(rownames(.)),
+#          resid = fcst-observed) %>%
+#   gather(key="key", value="value", -time)
 
-plt.df = plt.df1 %>% full_join(plt.df2) %>% full_join(plt.df3) %>%
-  gather(key="key", value="value", -t)
+# g1 = ggplot(mapping=aes(x=time, y=value, color=key)) +
+#   geom_line(data=plt.train, size=0.25) +
+#   geom_line(data=plt.test, size=0.25)
+# g1
+# ggplotly(g1)
 
-ggplot(plt.df, aes(x=t, y=value, color=key)) +
-  geom_line()
+ggplot(X.all %>% filter(location %in% levels(X.all$location)[1:6],
+                        time > as.POSIXct("2009-07-01")),
+       aes(x=time, y=value, color=key)) +
+  geom_line() +
+  facet_wrap(.~location)
+```
+
+Error quantification
+
+```{r, eval=F}
+MAE = mean(plt.test %>% filter(key=="resid") %>% pull(value) %>% abs)
+MAE  # people per hour
 ```
