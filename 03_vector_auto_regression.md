@@ -16,7 +16,7 @@ Process TS data
 ---------------
 
 ``` r
-data.ts = raw.ts %>%
+X = raw.ts %>%
   dplyr::select(-ID) %>%
   dplyr::select(Date_Time, Sensor_Name, Hourly_Counts) %>%
   spread(key=Sensor_Name, value=Hourly_Counts) %>%
@@ -24,7 +24,7 @@ data.ts = raw.ts %>%
   as.zoo %>%
   na.contiguous # analysis does not include missing data
   # stcenter# %>%
-names(data.ts) = make.names(names(data.ts))
+names(X) = make.names(names(X))
 ```
 
 Perform differencing
@@ -33,8 +33,8 @@ Perform differencing
 Confirm that each sensor series is stationary as we would expect
 
 ``` r
-for (i in seq_along(colnames(data.ts))) {
-  print(ndiffs(data.ts[,i], test="adf"))
+for (i in seq_along(colnames(X))) {
+  print(ndiffs(X[,i], test="adf"))
 }
 ```
 
@@ -59,23 +59,88 @@ for (i in seq_along(colnames(data.ts))) {
 Test to perform seasonal differencing. Weekly differencing only seems to give the best PACF plot.
 
 ``` r
-data.diff = data.ts %>%
+data.diff = X %>%
   diff(lag=168)
 plot(data.diff[,2])
+```
+
+![](03_vector_auto_regression_files/figure-markdown_github/unnamed-chunk-4-1.png)
+
+``` r
 pacf(data.diff[,2])
 ```
+
+![](03_vector_auto_regression_files/figure-markdown_github/unnamed-chunk-4-2.png)
+
+Test for cointegration (causality).
+
+``` r
+jotest=ca.jo(data.diff[,1:3], type="trace", K=2, ecdet="none", spec="longrun")
+summary(jotest)
+```
+
+    ## 
+    ## ###################### 
+    ## # Johansen-Procedure # 
+    ## ###################### 
+    ## 
+    ## Test type: trace statistic , with linear trend 
+    ## 
+    ## Eigenvalues (lambda):
+    ## [1] 0.14460533 0.11435648 0.06690293
+    ## 
+    ## Values of teststatistic and critical values of test:
+    ## 
+    ##            test 10pct  5pct  1pct
+    ## r <= 2 | 162.31  6.50  8.18 11.65
+    ## r <= 1 | 446.97 15.66 17.95 23.52
+    ## r = 0  | 813.08 28.71 31.52 37.22
+    ## 
+    ## Eigenvectors, normalised to first column:
+    ## (These are the cointegration relations)
+    ## 
+    ##                               Australia.on.Collins.l2
+    ## Australia.on.Collins.l2                     1.0000000
+    ## Bourke.Street.Mall..North..l2              -0.5255953
+    ## Bourke.Street.Mall..South..l2              -0.4846191
+    ##                               Bourke.Street.Mall..North..l2
+    ## Australia.on.Collins.l2                           1.0000000
+    ## Bourke.Street.Mall..North..l2                     0.2126367
+    ## Bourke.Street.Mall..South..l2                     0.1486375
+    ##                               Bourke.Street.Mall..South..l2
+    ## Australia.on.Collins.l2                             1.00000
+    ## Bourke.Street.Mall..North..l2                     -17.43181
+    ## Bourke.Street.Mall..South..l2                      18.42751
+    ## 
+    ## Weights W:
+    ## (This is the loading matrix)
+    ## 
+    ##                              Australia.on.Collins.l2
+    ## Australia.on.Collins.d                    -0.0783956
+    ## Bourke.Street.Mall..North..d               0.3151664
+    ## Bourke.Street.Mall..South..d               0.2847123
+    ##                              Bourke.Street.Mall..North..l2
+    ## Australia.on.Collins.d                          -0.2121899
+    ## Bourke.Street.Mall..North..d                    -0.1699760
+    ## Bourke.Street.Mall..South..d                    -0.1619121
+    ##                              Bourke.Street.Mall..South..l2
+    ## Australia.on.Collins.d                        0.0001602198
+    ## Bourke.Street.Mall..North..d                  0.0037680025
+    ## Bourke.Street.Mall..South..d                 -0.0051508124
+
+Above is an example of the Johansen co-integration test, using just three series instead of the entire matrix. The *r* test statistics reject the null hypothesis that the series are not co-integrated.
 
 Split into train/test sets. Later this can turn into a rolling train/test.
 
 ``` r
 frac = 0.8
-X.train = head(data.ts, round(nrow(data.ts)*frac))
-X.test = tail(data.ts, round(nrow(data.ts)*(1-frac)))
+X.train = head(X, round(nrow(X)*frac))
+X.test = tail(X, round(nrow(X)*(1-frac)))
 plot(X.train)
 title("Original series")
 ```
 
-![](03_vector_auto_regression_files/figure-markdown_github/unnamed-chunk-5-1.png)
+![](03_vector_auto_regression_files/figure-markdown_github/unnamed-chunk-6-1.png)
 
 ``` r
 X.train.diff = X.train %>%
@@ -84,7 +149,7 @@ plot(X.train.diff)
 title("Seasonally differenced series")
 ```
 
-![](03_vector_auto_regression_files/figure-markdown_github/unnamed-chunk-5-2.png)
+![](03_vector_auto_regression_files/figure-markdown_github/unnamed-chunk-6-2.png)
 
 Perform vector autoregression. Assume the moving average component is not necessary because the series is stationary. [Useful link](https://stats.stackexchange.com/questions/191851/var-forecasting-methodology)
 
@@ -171,7 +236,7 @@ ggplot(X.all %>% filter(location %in% levels(X.all$location)[1:6]),
   ylim(0, NA)
 ```
 
-![](03_vector_auto_regression_files/figure-markdown_github/unnamed-chunk-8-1.png)
+![](03_vector_auto_regression_files/figure-markdown_github/unnamed-chunk-9-1.png)
 
 Error quantification
 
@@ -181,7 +246,7 @@ MAE = X.obs.all %>%
   dplyr::select(time, location, value.obs, value.fcst) %>%
   mutate(AE = abs(value.obs-value.fcst)) %>%
   pull(AE) %>%
-  mean()
+  mean
 MAE
 ```
 
@@ -208,9 +273,9 @@ arfcst = sapply(names(arfcst), function(N) diffinv(arfcst[,N],
 plot(X.fcst.all$value, arfcst$value)
 ```
 
-![](03_vector_auto_regression_files/figure-markdown_github/unnamed-chunk-10-1.png)
+![](03_vector_auto_regression_files/figure-markdown_github/unnamed-chunk-11-1.png)
 
-Unlike a univariate AR(1) model, the VAR allows some forecasts to go to zero.
+Unlike a univariate AR(1) model, this particular VAR prediction contains negative values.
 
 ``` r
 X.all = X.train.all %>% rbind(X.obs.all) %>% rbind(arfcst) %>%
@@ -223,7 +288,7 @@ ggplot(X.all %>% filter(location %in% levels(X.all$location)[1:6]),
   ylim(0, NA)
 ```
 
-![](03_vector_auto_regression_files/figure-markdown_github/unnamed-chunk-11-1.png)
+![](03_vector_auto_regression_files/figure-markdown_github/unnamed-chunk-12-1.png)
 
 ``` r
 MAE = X.obs.all %>%

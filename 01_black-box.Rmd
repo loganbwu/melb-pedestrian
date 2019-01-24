@@ -19,6 +19,7 @@ library(tidyverse)
 library(plotly)
 library(xtable)
 library(knitr)
+library(ranger)
 ```
 
 ## Load data
@@ -45,7 +46,7 @@ Could include:
 
 ```{r}
 metadata = c("Date_Time", "Sensor_Name", "Time", "Day")
-nlag = 3
+nlag = 4
 
 data.ts = raw.ts %>%
   dplyr::select(metadata, Hourly_Counts) %>%
@@ -83,17 +84,16 @@ for (j in 1:nloc) {
 X = do.call(rbind, X) %>%
   drop_na() %>%
   arrange(Date_Time)
+names(X) = make.names(names(X))
 X %>% head %>% kable
 ```
 
-## Test RF
+## Test RF on train/test split
 
 ```{r}
-library(ranger)
-names(X) = make.names(names(X))
-n.test = round(nrow(X)) * 0.2
-X.train = X %>% head(nrow(X) - n.test)
-X.test = X %>% tail(n.test)
+frac=0.8
+X.train = head(X, round(nrow(X)*frac))
+X.test = tail(X, round(nrow(X)*(1-frac)))
 y.test = X.test %>% pull(Hourly_Counts)
 ```
 
@@ -105,13 +105,28 @@ pred <- predict(rf, X.test)
 X.test$pred = pred$predictions
 plot(y.test, pred$predictions)
 plot(log(y.test), log(pred$predictions))
-cat("RMSE", sqrt(sum((y.test-pred$predictions)^2)))
+cat("RMSE", sqrt(mean((y.test-pred$predictions)^2)))
+cat("MAE", mean(abs(y.test-pred$predictions)))
 
-ggplot(X.test, aes(x=Date_Time, y=Hourly_Counts)) +
-  geom_line(color="red") +
-  geom_line(aes(y=pred), color="blue") +
-  geom_line(data=X.train, aes(y=Hourly_Counts)) +
-  facet_grid(Sensor_Name~.)
+plt.df.train = X.train %>%
+  dplyr::select(time=Date_Time, location=Sensor_Name, train=Hourly_Counts) %>%
+  gather(key="key", value="value", -time, -location)
+plt.df.test = X.test %>%
+  dplyr::select(time=Date_Time, location=Sensor_Name, obs=Hourly_Counts, fcst=pred) %>%
+  gather(key="key", value="value", -time, -location)
+plt.df = rbind(plt.df.train, plt.df.test)
+
+ggplot(plt.df %>% filter(location %in% levels(plt.df$location)[1:6]),
+       aes(x=time, y=value, color=key)) +
+  geom_line(alpha=0.5) +
+  facet_wrap(~location, ncol=1) +
+  ylim(0, NA)
+
+# ggplot(X.test, aes(x=Date_Time, y=Hourly_Counts)) +
+#   geom_line(color="red") +
+#   geom_line(aes(y=pred), color="blue") +
+#   geom_line(data=X.train, aes(y=Hourly_Counts)) +
+#   facet_wrap(~Sensor_Name, ncol=1)
 ```
 
 Introduce time and weekday. Would expect it to improve.
@@ -122,17 +137,24 @@ pred2 <- predict(rf2, X.test)
 X.test$pred2 <- pred2$predictions
 plot(y.test, pred2$predictions)
 plot(log(y.test), log(pred2$predictions))
-cat("RMSE:", sqrt(sum((y.test-pred2$predictions)^2)))
+cat("RMSE:", sqrt(mean((y.test-pred2$predictions)^2)))
+cat("MAE", mean(abs(y.test-pred2$predictions)))
 
 ggplot(X.test, aes(x=Date_Time, y=Hourly_Counts)) +
   geom_line(color="red") +
   geom_line(aes(y=pred2), color="blue") +
   geom_line(data=X.train, aes(y=Hourly_Counts)) +
   facet_grid(Sensor_Name~.)
-
 ```
 
 Early indications are good but needs proper model comparison. Comparison required against univariate TS is needed. Also needs to incorporate uncertainty.
+
+## MAE / model evaluation
+
+```{r}
+MAE = mean(abs(pred$predictions - y.test))
+MAE
+```
 
 ## Cross-correlation importance
 
