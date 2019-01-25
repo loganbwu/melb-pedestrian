@@ -16,6 +16,7 @@ library(starma)
 library(forecast)
 library(ggcorrplot)
 library(tidyverse)
+library(xts)
 library(plotly)
 library(xtable)
 library(knitr)
@@ -45,45 +46,44 @@ Could include:
 - Public holiday
 
 ```{r}
-metadata = c("Date_Time", "Sensor_Name", "Time", "Day")
-nlag = 4
+nlag = 3
 
+locs = make.names(unique(raw.ts$Sensor_Name))
 data.ts = raw.ts %>%
-  dplyr::select(metadata, Hourly_Counts) %>%
+  dplyr::select(Date_Time, Sensor_Name, Hourly_Counts) %>%
   spread(key=Sensor_Name, value=Hourly_Counts) %>%
-  # dplyr::select(-Date_Time) %>%
-  mutate(Day = factor(Day)) %>%
-  as.ts %>%
-  na.contiguous %>% # analysis does not include missing data
+  as.xts(frequency=168) %>%
+  as.zoo %>%
+  na.contiguous %>%# analysis does not include missing data
   as.data.frame %>%
-  mutate(Date_Time=as.POSIXct(Date_Time, origin="1970-01-01"))
-data.ts = data.ts[,1:12]
-nloc = ncol(data.ts) - length(metadata)
-locs = setdiff(colnames(data.ts), metadata)
-# data.lag = data.ts
+  mutate(time=as.POSIXct(rownames(.)),
+         day=factor(weekdays(time)),
+         hour=hour(time))
+names(data.ts) = make.names(names(data.ts))
 
 lags = list()
-for (i in 1:nlag) {
+lags_ix = c(1:nlag, 24, 168)
+for (i in seq_along(lags_ix)) {
   lags[[i]] = data.ts %>%
-    dplyr::select(-one_of(metadata)) %>%
-    mutate_all(function (x) lead(x, i)) %>%
-    rename_all(function(x) paste0(x,".lag", i))
+    dplyr::select(-time, -day, -hour) %>%
+    mutate_all(function (x) lead(x, lags_ix[i])) %>%
+    rename_all(function(x) paste0(x,".lag", lags_ix[i]))
 }
 lags = do.call(cbind, lags)
 
 # append the lags onto each current measurement
 X = list()
-for (j in 1:nloc) {
+for (j in seq_along(locs)) {
   X[[j]] = cbind(Hourly_Counts=data.ts[,locs[j]], 
-                 Day=data.ts$Day, 
-                 Time=data.ts$Time, 
-                 Date_Time=data.ts$Date_Time,
-                 Sensor_Name=locs[j],
+                 day=data.ts$day, 
+                 hour=data.ts$hour, 
+                 time=data.ts$time,
+                 location=locs[j],
                  lags)
 }
 X = do.call(rbind, X) %>%
   drop_na() %>%
-  arrange(Date_Time)
+  arrange(time)
 names(X) = make.names(names(X))
 X %>% head %>% kable
 ```
@@ -91,7 +91,7 @@ X %>% head %>% kable
 ## Test RF on train/test split
 
 ```{r}
-frac=0.8
+frac = 0.8
 X.train = head(X, round(nrow(X)*frac))
 X.test = tail(X, round(nrow(X)*(1-frac)))
 y.test = X.test %>% pull(Hourly_Counts)
@@ -100,19 +100,21 @@ y.test = X.test %>% pull(Hourly_Counts)
 Exclude the time and weekday from the model. Purely regressed on lags from the past three hours.
 
 ```{r}
-rf <- ranger(Hourly_Counts ~ . -Time -Day -Date_Time, data=X.train)
+rf <- ranger(Hourly_Counts ~ . -hour -day -time, num.trees=100, data=X.train)
+```
+```{r}
 pred <- predict(rf, X.test)
 X.test$pred = pred$predictions
-plot(y.test, pred$predictions)
-plot(log(y.test), log(pred$predictions))
-cat("RMSE", sqrt(mean((y.test-pred$predictions)^2)))
-cat("MAE", mean(abs(y.test-pred$predictions)))
+ggplot(X.test, aes(x=Hourly_Counts, y=pred)) +
+  geom_point(alpha=0.25)
+cat("RMSE", sqrt(mean((X.test$Hourly_Counts-X.test$pred)^2)), "\n")
+cat("MAE", mean(abs(X.test$Hourly_Counts-X.test$pred)))
 
 plt.df.train = X.train %>%
-  dplyr::select(time=Date_Time, location=Sensor_Name, train=Hourly_Counts) %>%
+  dplyr::select(time, location, train=Hourly_Counts) %>%
   gather(key="key", value="value", -time, -location)
 plt.df.test = X.test %>%
-  dplyr::select(time=Date_Time, location=Sensor_Name, obs=Hourly_Counts, fcst=pred) %>%
+  dplyr::select(time, location, obs=Hourly_Counts, fcst=pred) %>%
   gather(key="key", value="value", -time, -location)
 plt.df = rbind(plt.df.train, plt.df.test)
 
@@ -121,40 +123,37 @@ ggplot(plt.df %>% filter(location %in% levels(plt.df$location)[1:6]),
   geom_line(alpha=0.5) +
   facet_wrap(~location, ncol=1) +
   ylim(0, NA)
-
-# ggplot(X.test, aes(x=Date_Time, y=Hourly_Counts)) +
-#   geom_line(color="red") +
-#   geom_line(aes(y=pred), color="blue") +
-#   geom_line(data=X.train, aes(y=Hourly_Counts)) +
-#   facet_wrap(~Sensor_Name, ncol=1)
 ```
 
 Introduce time and weekday. Would expect it to improve.
 
 ```{r}
-rf2 <- ranger(Hourly_Counts ~ . -Date_Time, data=X.train)
-pred2 <- predict(rf2, X.test)
-X.test$pred2 <- pred2$predictions
-plot(y.test, pred2$predictions)
-plot(log(y.test), log(pred2$predictions))
-cat("RMSE:", sqrt(mean((y.test-pred2$predictions)^2)))
-cat("MAE", mean(abs(y.test-pred2$predictions)))
-
-ggplot(X.test, aes(x=Date_Time, y=Hourly_Counts)) +
-  geom_line(color="red") +
-  geom_line(aes(y=pred2), color="blue") +
-  geom_line(data=X.train, aes(y=Hourly_Counts)) +
-  facet_grid(Sensor_Name~.)
+rf2 <- ranger(Hourly_Counts ~ . -time, num.trees=100, data=X.train)
 ```
-
-Early indications are good but needs proper model comparison. Comparison required against univariate TS is needed. Also needs to incorporate uncertainty.
-
-## MAE / model evaluation
-
 ```{r}
-MAE = mean(abs(pred$predictions - y.test))
-MAE
+pred2 <- predict(rf2, X.test)
+X.test$pred2 = pred2$predictions
+ggplot(X.test, aes(x=Hourly_Counts, y=pred2)) +
+  geom_point(alpha=0.25)
+cat("RMSE", sqrt(mean((X.test$Hourly_Counts-X.test$pred2)^2)), "\n")
+cat("MAE", mean(abs(X.test$Hourly_Counts-X.test$pred2)))
+
+plt.df.train = X.train %>%
+  dplyr::select(time, location, train=Hourly_Counts) %>%
+  gather(key="key", value="value", -time, -location)
+plt.df.test = X.test %>%
+  dplyr::select(time, location, obs=Hourly_Counts, fcst=pred2) %>%
+  gather(key="key", value="value", -time, -location)
+plt.df = rbind(plt.df.train, plt.df.test)
+
+ggplot(plt.df %>% filter(location %in% levels(plt.df$location)[1:6]),
+       aes(x=time, y=value, color=key)) +
+  geom_line(alpha=0.5) +
+  facet_wrap(~location, ncol=1) +
+  ylim(0, NA)
 ```
+
+Kind of works but systematically underestimates some areas. Comparison required against univariate TS is needed. Also needs to incorporate uncertainty.
 
 ## Cross-correlation importance
 
@@ -187,6 +186,43 @@ for (s_n in Sensor_Names) {
 ```
 
 Permutation feature importance: Determines the marginal impact on performance compared to when one feature is randomised (permuted).
+
 ```{r, eval=F}
 importance_pvalues(rfs[[1]], "altmann", formula=formula("Hourly_Counts ~ . - Sensor_Name - Date_Time"), data=x[[s_n]], num.permutations=10)
+```
+
+# Try again on differenced series
+
+```{r, eval=F}
+data.ts.diff = data.ts %>%
+  dplyr::select(-time, -day, -hour)# %>%
+  as.xts %>%
+  diff(lag=168)
+  
+
+lags = list()
+lags_ix = c(1:nlag, 24, 168)
+for (i in seq_along(lags_ix)) {
+  lags[[i]] = data.ts %>%
+    dplyr::select(-time, -day, -hour) %>%
+    mutate_all(function (x) lead(x, lags_ix[i])) %>%
+    rename_all(function(x) paste0(x,".lag", lags_ix[i]))
+}
+lags = do.call(cbind, lags)
+
+# append the lags onto each current measurement
+X = list()
+for (j in seq_along(locs)) {
+  X[[j]] = cbind(Hourly_Counts=data.ts[,locs[j]], 
+                 day=data.ts$day, 
+                 hour=data.ts$hour, 
+                 time=data.ts$time,
+                 location=locs[j],
+                 lags)
+}
+X = do.call(rbind, X) %>%
+  drop_na() %>%
+  arrange(time)
+names(X) = make.names(names(X))
+X %>% head %>% kable
 ```

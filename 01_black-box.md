@@ -28,79 +28,67 @@ Could include:
 -   Public holiday
 
 ``` r
-metadata = c("Date_Time", "Sensor_Name", "Time", "Day")
-nlag = 4
+nlag = 3
 
+locs = make.names(unique(raw.ts$Sensor_Name))
 data.ts = raw.ts %>%
-  dplyr::select(metadata, Hourly_Counts) %>%
+  dplyr::select(Date_Time, Sensor_Name, Hourly_Counts) %>%
   spread(key=Sensor_Name, value=Hourly_Counts) %>%
-  # dplyr::select(-Date_Time) %>%
-  mutate(Day = factor(Day)) %>%
-  as.ts %>%
-  na.contiguous %>% # analysis does not include missing data
+  as.xts(frequency=168) %>%
+  as.zoo %>%
+  na.contiguous %>%# analysis does not include missing data
   as.data.frame %>%
-  mutate(Date_Time=as.POSIXct(Date_Time, origin="1970-01-01"))
+  mutate(time=as.POSIXct(rownames(.)),
+         day=factor(weekdays(time)),
+         hour=hour(time))
 ```
 
     ## Warning: package 'bindrcpp' was built under R version 3.4.4
 
 ``` r
-data.ts = data.ts[,1:12]
-nloc = ncol(data.ts) - length(metadata)
-locs = setdiff(colnames(data.ts), metadata)
-# data.lag = data.ts
+names(data.ts) = make.names(names(data.ts))
 
 lags = list()
-for (i in 1:nlag) {
+lags_ix = c(1:nlag, 24, 168)
+for (i in seq_along(lags_ix)) {
   lags[[i]] = data.ts %>%
-    dplyr::select(-one_of(metadata)) %>%
-    mutate_all(function (x) lead(x, i)) %>%
-    rename_all(function(x) paste0(x,".lag", i))
+    dplyr::select(-time, -day, -hour) %>%
+    mutate_all(function (x) lead(x, lags_ix[i])) %>%
+    rename_all(function(x) paste0(x,".lag", lags_ix[i]))
 }
-```
-
-    ## Warning: Unknown columns: `Sensor_Name`
-
-    ## Warning: Unknown columns: `Sensor_Name`
-
-    ## Warning: Unknown columns: `Sensor_Name`
-
-    ## Warning: Unknown columns: `Sensor_Name`
-
-``` r
 lags = do.call(cbind, lags)
 
 # append the lags onto each current measurement
 X = list()
-for (j in 1:nloc) {
+for (j in seq_along(locs)) {
   X[[j]] = cbind(Hourly_Counts=data.ts[,locs[j]], 
-                 Day=data.ts$Day, 
-                 Time=data.ts$Time, 
-                 Date_Time=data.ts$Date_Time,
-                 Sensor_Name=locs[j],
+                 day=data.ts$day, 
+                 hour=data.ts$hour, 
+                 time=data.ts$time,
+                 location=locs[j],
                  lags)
 }
 X = do.call(rbind, X) %>%
   drop_na() %>%
-  arrange(Date_Time)
+  arrange(time)
 names(X) = make.names(names(X))
 X %>% head %>% kable
 ```
 
-|  Hourly\_Counts|  Day|  Time| Date\_Time | Sensor\_Name               |  Australia.on.Collins.lag1|  Bourke.Street.Mall..North..lag1|  Bourke.Street.Mall..South..lag1|  Collins.Place..North..lag1|  Collins.Place..South..lag1|  Flagstaff.Station.lag1|  Flinders.Street.Station.Underpass.lag1|  Melbourne.Central.lag1|  New.Quay.lag1|  Australia.on.Collins.lag2|  Bourke.Street.Mall..North..lag2|  Bourke.Street.Mall..South..lag2|  Collins.Place..North..lag2|  Collins.Place..South..lag2|  Flagstaff.Station.lag2|  Flinders.Street.Station.Underpass.lag2|  Melbourne.Central.lag2|  New.Quay.lag2|  Australia.on.Collins.lag3|  Bourke.Street.Mall..North..lag3|  Bourke.Street.Mall..South..lag3|  Collins.Place..North..lag3|  Collins.Place..South..lag3|  Flagstaff.Station.lag3|  Flinders.Street.Station.Underpass.lag3|  Melbourne.Central.lag3|  New.Quay.lag3|  Australia.on.Collins.lag4|  Bourke.Street.Mall..North..lag4|  Bourke.Street.Mall..South..lag4|  Collins.Place..North..lag4|  Collins.Place..South..lag4|  Flagstaff.Station.lag4|  Flinders.Street.Station.Underpass.lag4|  Melbourne.Central.lag4|  New.Quay.lag4|
-|---------------:|----:|-----:|:-----------|:---------------------------|--------------------------:|--------------------------------:|--------------------------------:|---------------------------:|---------------------------:|-----------------------:|---------------------------------------:|-----------------------:|--------------:|--------------------------:|--------------------------------:|--------------------------------:|---------------------------:|---------------------------:|-----------------------:|---------------------------------------:|-----------------------:|--------------:|--------------------------:|--------------------------------:|--------------------------------:|---------------------------:|---------------------------:|-----------------------:|---------------------------------------:|-----------------------:|--------------:|--------------------------:|--------------------------------:|--------------------------------:|---------------------------:|---------------------------:|-----------------------:|---------------------------------------:|-----------------------:|--------------:|
-|              45|    5|     0| 2009-05-21 | Australia on Collins       |                         10|                               18|                               15|                           8|                          23|                       5|                                      52|                     118|              3|                          8|                                7|                                9|                           3|                           9|                       3|                                      30|                      64|              4|                          5|                               10|                               18|                           1|                          19|                      18|                                      20|                      32|              5|                         11|                               22|                                8|                           1|                          13|                      10|                                      67|                      43|              0|
-|              27|    5|     0| 2009-05-21 | Bourke Street Mall (North) |                         10|                               18|                               15|                           8|                          23|                       5|                                      52|                     118|              3|                          8|                                7|                                9|                           3|                           9|                       3|                                      30|                      64|              4|                          5|                               10|                               18|                           1|                          19|                      18|                                      20|                      32|              5|                         11|                               22|                                8|                           1|                          13|                      10|                                      67|                      43|              0|
-|              40|    5|     0| 2009-05-21 | Bourke Street Mall (South) |                         10|                               18|                               15|                           8|                          23|                       5|                                      52|                     118|              3|                          8|                                7|                                9|                           3|                           9|                       3|                                      30|                      64|              4|                          5|                               10|                               18|                           1|                          19|                      18|                                      20|                      32|              5|                         11|                               22|                                8|                           1|                          13|                      10|                                      67|                      43|              0|
-|               8|    5|     0| 2009-05-21 | Collins Place (North)      |                         10|                               18|                               15|                           8|                          23|                       5|                                      52|                     118|              3|                          8|                                7|                                9|                           3|                           9|                       3|                                      30|                      64|              4|                          5|                               10|                               18|                           1|                          19|                      18|                                      20|                      32|              5|                         11|                               22|                                8|                           1|                          13|                      10|                                      67|                      43|              0|
-|              39|    5|     0| 2009-05-21 | Collins Place (South)      |                         10|                               18|                               15|                           8|                          23|                       5|                                      52|                     118|              3|                          8|                                7|                                9|                           3|                           9|                       3|                                      30|                      64|              4|                          5|                               10|                               18|                           1|                          19|                      18|                                      20|                      32|              5|                         11|                               22|                                8|                           1|                          13|                      10|                                      67|                      43|              0|
-|              10|    5|     0| 2009-05-21 | Flagstaff Station          |                         10|                               18|                               15|                           8|                          23|                       5|                                      52|                     118|              3|                          8|                                7|                                9|                           3|                           9|                       3|                                      30|                      64|              4|                          5|                               10|                               18|                           1|                          19|                      18|                                      20|                      32|              5|                         11|                               22|                                8|                           1|                          13|                      10|                                      67|                      43|              0|
+|  Hourly\_Counts| day      |  hour| time       | location                          |  Australia.on.Collins.lag1|  Bourke.Street.Mall..North..lag1|  Bourke.Street.Mall..South..lag1|  Collins.Place..North..lag1|  Collins.Place..South..lag1|  Flagstaff.Station.lag1|  Flinders.Street.Station.Underpass.lag1|  Melbourne.Central.lag1|  New.Quay.lag1|  Princes.Bridge.lag1|  Sandridge.Bridge.lag1|  Southern.Cross.Station.lag1|  State.Library.lag1|  Town.Hall..West..lag1|  Victoria.Point.lag1|  Waterfront.City.lag1|  Webb.Bridge.lag1|  Australia.on.Collins.lag2|  Bourke.Street.Mall..North..lag2|  Bourke.Street.Mall..South..lag2|  Collins.Place..North..lag2|  Collins.Place..South..lag2|  Flagstaff.Station.lag2|  Flinders.Street.Station.Underpass.lag2|  Melbourne.Central.lag2|  New.Quay.lag2|  Princes.Bridge.lag2|  Sandridge.Bridge.lag2|  Southern.Cross.Station.lag2|  State.Library.lag2|  Town.Hall..West..lag2|  Victoria.Point.lag2|  Waterfront.City.lag2|  Webb.Bridge.lag2|  Australia.on.Collins.lag3|  Bourke.Street.Mall..North..lag3|  Bourke.Street.Mall..South..lag3|  Collins.Place..North..lag3|  Collins.Place..South..lag3|  Flagstaff.Station.lag3|  Flinders.Street.Station.Underpass.lag3|  Melbourne.Central.lag3|  New.Quay.lag3|  Princes.Bridge.lag3|  Sandridge.Bridge.lag3|  Southern.Cross.Station.lag3|  State.Library.lag3|  Town.Hall..West..lag3|  Victoria.Point.lag3|  Waterfront.City.lag3|  Webb.Bridge.lag3|  Australia.on.Collins.lag24|  Bourke.Street.Mall..North..lag24|  Bourke.Street.Mall..South..lag24|  Collins.Place..North..lag24|  Collins.Place..South..lag24|  Flagstaff.Station.lag24|  Flinders.Street.Station.Underpass.lag24|  Melbourne.Central.lag24|  New.Quay.lag24|  Princes.Bridge.lag24|  Sandridge.Bridge.lag24|  Southern.Cross.Station.lag24|  State.Library.lag24|  Town.Hall..West..lag24|  Victoria.Point.lag24|  Waterfront.City.lag24|  Webb.Bridge.lag24|  Australia.on.Collins.lag168|  Bourke.Street.Mall..North..lag168|  Bourke.Street.Mall..South..lag168|  Collins.Place..North..lag168|  Collins.Place..South..lag168|  Flagstaff.Station.lag168|  Flinders.Street.Station.Underpass.lag168|  Melbourne.Central.lag168|  New.Quay.lag168|  Princes.Bridge.lag168|  Sandridge.Bridge.lag168|  Southern.Cross.Station.lag168|  State.Library.lag168|  Town.Hall..West..lag168|  Victoria.Point.lag168|  Waterfront.City.lag168|  Webb.Bridge.lag168|
+|---------------:|:---------|-----:|:-----------|:----------------------------------|--------------------------:|--------------------------------:|--------------------------------:|---------------------------:|---------------------------:|-----------------------:|---------------------------------------:|-----------------------:|--------------:|--------------------:|----------------------:|----------------------------:|-------------------:|----------------------:|--------------------:|---------------------:|-----------------:|--------------------------:|--------------------------------:|--------------------------------:|---------------------------:|---------------------------:|-----------------------:|---------------------------------------:|-----------------------:|--------------:|--------------------:|----------------------:|----------------------------:|-------------------:|----------------------:|--------------------:|---------------------:|-----------------:|--------------------------:|--------------------------------:|--------------------------------:|---------------------------:|---------------------------:|-----------------------:|---------------------------------------:|-----------------------:|--------------:|--------------------:|----------------------:|----------------------------:|-------------------:|----------------------:|--------------------:|---------------------:|-----------------:|---------------------------:|---------------------------------:|---------------------------------:|----------------------------:|----------------------------:|------------------------:|----------------------------------------:|------------------------:|---------------:|---------------------:|-----------------------:|-----------------------------:|--------------------:|-----------------------:|---------------------:|----------------------:|------------------:|----------------------------:|----------------------------------:|----------------------------------:|-----------------------------:|-----------------------------:|-------------------------:|-----------------------------------------:|-------------------------:|----------------:|----------------------:|------------------------:|------------------------------:|---------------------:|------------------------:|----------------------:|-----------------------:|-------------------:|
+|              27| Thursday |     0| 2009-05-21 | Bourke.Street.Mall..North.        |                         10|                               18|                               15|                           8|                          23|                       5|                                      52|                     118|              3|                   29|                     15|                            2|                  73|                     77|                    4|                     1|                 0|                          8|                                7|                                9|                           3|                           9|                       3|                                      30|                      64|              4|                   15|                     12|                            1|                  22|                     37|                    0|                     3|                 3|                          5|                               10|                               18|                           1|                          19|                      18|                                      20|                      32|              5|                   18|                      7|                            5|                   8|                     29|                    2|                     0|                 6|                          37|                                49|                                46|                           20|                           37|                       15|                                      113|                      137|              12|                   110|                      63|                             3|                   87|                     197|                    16|                      7|                  5|                           52|                                 38|                                 44|                             9|                            33|                        14|                                       106|                       123|               12|                     91|                       46|                              5|                    49|                      156|                      6|                       5|                   0|
+|              40| Thursday |     0| 2009-05-21 | Bourke.Street.Mall..South.        |                         10|                               18|                               15|                           8|                          23|                       5|                                      52|                     118|              3|                   29|                     15|                            2|                  73|                     77|                    4|                     1|                 0|                          8|                                7|                                9|                           3|                           9|                       3|                                      30|                      64|              4|                   15|                     12|                            1|                  22|                     37|                    0|                     3|                 3|                          5|                               10|                               18|                           1|                          19|                      18|                                      20|                      32|              5|                   18|                      7|                            5|                   8|                     29|                    2|                     0|                 6|                          37|                                49|                                46|                           20|                           37|                       15|                                      113|                      137|              12|                   110|                      63|                             3|                   87|                     197|                    16|                      7|                  5|                           52|                                 38|                                 44|                             9|                            33|                        14|                                       106|                       123|               12|                     91|                       46|                              5|                    49|                      156|                      6|                       5|                   0|
+|             136| Thursday |     0| 2009-05-21 | Town.Hall..West.                  |                         10|                               18|                               15|                           8|                          23|                       5|                                      52|                     118|              3|                   29|                     15|                            2|                  73|                     77|                    4|                     1|                 0|                          8|                                7|                                9|                           3|                           9|                       3|                                      30|                      64|              4|                   15|                     12|                            1|                  22|                     37|                    0|                     3|                 3|                          5|                               10|                               18|                           1|                          19|                      18|                                      20|                      32|              5|                   18|                      7|                            5|                   8|                     29|                    2|                     0|                 6|                          37|                                49|                                46|                           20|                           37|                       15|                                      113|                      137|              12|                   110|                      63|                             3|                   87|                     197|                    16|                      7|                  5|                           52|                                 38|                                 44|                             9|                            33|                        14|                                       106|                       123|               12|                     91|                       46|                              5|                    49|                      156|                      6|                       5|                   0|
+|             149| Thursday |     0| 2009-05-21 | Princes.Bridge                    |                         10|                               18|                               15|                           8|                          23|                       5|                                      52|                     118|              3|                   29|                     15|                            2|                  73|                     77|                    4|                     1|                 0|                          8|                                7|                                9|                           3|                           9|                       3|                                      30|                      64|              4|                   15|                     12|                            1|                  22|                     37|                    0|                     3|                 3|                          5|                               10|                               18|                           1|                          19|                      18|                                      20|                      32|              5|                   18|                      7|                            5|                   8|                     29|                    2|                     0|                 6|                          37|                                49|                                46|                           20|                           37|                       15|                                      113|                      137|              12|                   110|                      63|                             3|                   87|                     197|                    16|                      7|                  5|                           52|                                 38|                                 44|                             9|                            33|                        14|                                       106|                       123|               12|                     91|                       46|                              5|                    49|                      156|                      6|                       5|                   0|
+|             127| Thursday |     0| 2009-05-21 | Flinders.Street.Station.Underpass |                         10|                               18|                               15|                           8|                          23|                       5|                                      52|                     118|              3|                   29|                     15|                            2|                  73|                     77|                    4|                     1|                 0|                          8|                                7|                                9|                           3|                           9|                       3|                                      30|                      64|              4|                   15|                     12|                            1|                  22|                     37|                    0|                     3|                 3|                          5|                               10|                               18|                           1|                          19|                      18|                                      20|                      32|              5|                   18|                      7|                            5|                   8|                     29|                    2|                     0|                 6|                          37|                                49|                                46|                           20|                           37|                       15|                                      113|                      137|              12|                   110|                      63|                             3|                   87|                     197|                    16|                      7|                  5|                           52|                                 38|                                 44|                             9|                            33|                        14|                                       106|                       123|               12|                     91|                       46|                              5|                    49|                      156|                      6|                       5|                   0|
+|               4| Thursday |     0| 2009-05-21 | Southern.Cross.Station            |                         10|                               18|                               15|                           8|                          23|                       5|                                      52|                     118|              3|                   29|                     15|                            2|                  73|                     77|                    4|                     1|                 0|                          8|                                7|                                9|                           3|                           9|                       3|                                      30|                      64|              4|                   15|                     12|                            1|                  22|                     37|                    0|                     3|                 3|                          5|                               10|                               18|                           1|                          19|                      18|                                      20|                      32|              5|                   18|                      7|                            5|                   8|                     29|                    2|                     0|                 6|                          37|                                49|                                46|                           20|                           37|                       15|                                      113|                      137|              12|                   110|                      63|                             3|                   87|                     197|                    16|                      7|                  5|                           52|                                 38|                                 44|                             9|                            33|                        14|                                       106|                       123|               12|                     91|                       46|                              5|                    49|                      156|                      6|                       5|                   0|
 
 Test RF on train/test split
 ---------------------------
 
 ``` r
-frac=0.8
+frac = 0.8
 X.train = head(X, round(nrow(X)*frac))
 X.test = tail(X, round(nrow(X)*(1-frac)))
 y.test = X.test %>% pull(Hourly_Counts)
@@ -109,43 +97,36 @@ y.test = X.test %>% pull(Hourly_Counts)
 Exclude the time and weekday from the model. Purely regressed on lags from the past three hours.
 
 ``` r
-rf <- ranger(Hourly_Counts ~ . -Time -Day -Date_Time, data=X.train)
+rf <- ranger(Hourly_Counts ~ . -hour -day -time, num.trees=100, data=X.train)
 ```
-
-    ## Growing trees.. Progress: 92%. Estimated remaining time: 2 seconds.
 
 ``` r
 pred <- predict(rf, X.test)
 X.test$pred = pred$predictions
-plot(y.test, pred$predictions)
+ggplot(X.test, aes(x=Hourly_Counts, y=pred)) +
+  geom_point(alpha=0.25)
 ```
 
-![](01_black-box_files/figure-markdown_github/unnamed-chunk-4-1.png)
+![](01_black-box_files/figure-markdown_github/unnamed-chunk-5-1.png)
 
 ``` r
-plot(log(y.test), log(pred$predictions))
+cat("RMSE", sqrt(mean((X.test$Hourly_Counts-X.test$pred)^2)), "\n")
 ```
 
-![](01_black-box_files/figure-markdown_github/unnamed-chunk-4-2.png)
+    ## RMSE 429.1817
 
 ``` r
-cat("RMSE", sqrt(mean((y.test-pred$predictions)^2)))
+cat("MAE", mean(abs(X.test$Hourly_Counts-X.test$pred)))
 ```
 
-    ## RMSE 277.2216
-
-``` r
-cat("MAE", mean(abs(y.test-pred$predictions)))
-```
-
-    ## MAE 160.272
+    ## MAE 271.7369
 
 ``` r
 plt.df.train = X.train %>%
-  dplyr::select(time=Date_Time, location=Sensor_Name, train=Hourly_Counts) %>%
+  dplyr::select(time, location, train=Hourly_Counts) %>%
   gather(key="key", value="value", -time, -location)
 plt.df.test = X.test %>%
-  dplyr::select(time=Date_Time, location=Sensor_Name, obs=Hourly_Counts, fcst=pred) %>%
+  dplyr::select(time, location, obs=Hourly_Counts, fcst=pred) %>%
   gather(key="key", value="value", -time, -location)
 plt.df = rbind(plt.df.train, plt.df.test)
 
@@ -156,71 +137,54 @@ ggplot(plt.df %>% filter(location %in% levels(plt.df$location)[1:6]),
   ylim(0, NA)
 ```
 
-![](01_black-box_files/figure-markdown_github/unnamed-chunk-4-3.png)
-
-``` r
-# ggplot(X.test, aes(x=Date_Time, y=Hourly_Counts)) +
-#   geom_line(color="red") +
-#   geom_line(aes(y=pred), color="blue") +
-#   geom_line(data=X.train, aes(y=Hourly_Counts)) +
-#   facet_wrap(~Sensor_Name, ncol=1)
-```
+![](01_black-box_files/figure-markdown_github/unnamed-chunk-5-2.png)
 
 Introduce time and weekday. Would expect it to improve.
 
 ``` r
-rf2 <- ranger(Hourly_Counts ~ . -Date_Time, data=X.train)
+rf2 <- ranger(Hourly_Counts ~ . -time, num.trees=100, data=X.train)
 ```
-
-    ## Growing trees.. Progress: 89%. Estimated remaining time: 3 seconds.
 
 ``` r
 pred2 <- predict(rf2, X.test)
-X.test$pred2 <- pred2$predictions
-plot(y.test, pred2$predictions)
+X.test$pred2 = pred2$predictions
+ggplot(X.test, aes(x=Hourly_Counts, y=pred2)) +
+  geom_point(alpha=0.25)
 ```
 
-![](01_black-box_files/figure-markdown_github/unnamed-chunk-5-1.png)
+![](01_black-box_files/figure-markdown_github/unnamed-chunk-7-1.png)
 
 ``` r
-plot(log(y.test), log(pred2$predictions))
+cat("RMSE", sqrt(mean((X.test$Hourly_Counts-X.test$pred2)^2)), "\n")
 ```
 
-![](01_black-box_files/figure-markdown_github/unnamed-chunk-5-2.png)
+    ## RMSE 433.4264
 
 ``` r
-cat("RMSE:", sqrt(mean((y.test-pred2$predictions)^2)))
+cat("MAE", mean(abs(X.test$Hourly_Counts-X.test$pred2)))
 ```
 
-    ## RMSE: 290.6063
+    ## MAE 276.0762
 
 ``` r
-cat("MAE", mean(abs(y.test-pred2$predictions)))
+plt.df.train = X.train %>%
+  dplyr::select(time, location, train=Hourly_Counts) %>%
+  gather(key="key", value="value", -time, -location)
+plt.df.test = X.test %>%
+  dplyr::select(time, location, obs=Hourly_Counts, fcst=pred2) %>%
+  gather(key="key", value="value", -time, -location)
+plt.df = rbind(plt.df.train, plt.df.test)
+
+ggplot(plt.df %>% filter(location %in% levels(plt.df$location)[1:6]),
+       aes(x=time, y=value, color=key)) +
+  geom_line(alpha=0.5) +
+  facet_wrap(~location, ncol=1) +
+  ylim(0, NA)
 ```
 
-    ## MAE 167.6095
+![](01_black-box_files/figure-markdown_github/unnamed-chunk-7-2.png)
 
-``` r
-ggplot(X.test, aes(x=Date_Time, y=Hourly_Counts)) +
-  geom_line(color="red") +
-  geom_line(aes(y=pred2), color="blue") +
-  geom_line(data=X.train, aes(y=Hourly_Counts)) +
-  facet_grid(Sensor_Name~.)
-```
-
-![](01_black-box_files/figure-markdown_github/unnamed-chunk-5-3.png)
-
-Early indications are good but needs proper model comparison. Comparison required against univariate TS is needed. Also needs to incorporate uncertainty.
-
-MAE / model evaluation
-----------------------
-
-``` r
-MAE = mean(abs(pred$predictions - y.test))
-MAE
-```
-
-    ## [1] 160.272
+Kind of works but systematically underestimates some areas. Comparison required against univariate TS is needed. Also needs to incorporate uncertainty.
 
 Cross-correlation importance
 ----------------------------
@@ -252,8 +216,6 @@ for (s_n in Sensor_Names) {
   print(g)
 }
 ```
-
-![](01_black-box_files/figure-markdown_github/unnamed-chunk-8-1.png)![](01_black-box_files/figure-markdown_github/unnamed-chunk-8-2.png)![](01_black-box_files/figure-markdown_github/unnamed-chunk-8-3.png)![](01_black-box_files/figure-markdown_github/unnamed-chunk-8-4.png)![](01_black-box_files/figure-markdown_github/unnamed-chunk-8-5.png)![](01_black-box_files/figure-markdown_github/unnamed-chunk-8-6.png)![](01_black-box_files/figure-markdown_github/unnamed-chunk-8-7.png)![](01_black-box_files/figure-markdown_github/unnamed-chunk-8-8.png)
 
 Permutation feature importance: Determines the marginal impact on performance compared to when one feature is randomised (permuted).
 

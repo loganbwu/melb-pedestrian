@@ -34,13 +34,11 @@ raw.ts[,Date_Time := as.POSIXct(Date_Time, format="%m/%d/%Y %I:%M:%S %p")]
 
 ```{r}
 X = raw.ts %>%
-  dplyr::select(-ID) %>%
   dplyr::select(Date_Time, Sensor_Name, Hourly_Counts) %>%
   spread(key=Sensor_Name, value=Hourly_Counts) %>%
   as.xts(frequency=168) %>%
   as.zoo %>%
   na.contiguous # analysis does not include missing data
-  # stcenter# %>%
 names(X) = make.names(names(X))
 ```
 
@@ -93,7 +91,7 @@ Perform vector autoregression. Assume the moving average component is not necess
 # lag optimisation
 VARselect(X.train.diff, lag.max=10, type="both", season=168)
 
-myvar = VAR(X.train.diff, p=2, season=168)
+myvar = VAR(X.train.diff, p=1, season=168)
 
 serial.test(myvar, lags.pt=10, type="PT.asymptotic")
 # arch.test(myvar, lags.multi=10)
@@ -107,15 +105,14 @@ prd <- predict(myvar, n.ahead = nrow(X.test))
 ```
 
 ```{r}
-# fcst = diffinv(prd$fcst$Webb.Bridge[,1], lag=168, xi=tail(X.train[,"Webb.Bridge"], 168)) %>%
-#   tail(nrow(X.test))
 fcst.all = lapply(prd$fcst,
                   function(X) X[,"fcst"]
   )
-fcst.all = sapply(names(prd$fcst), function(N) diffinv(fcst.all[[N]],
-                                                       lag=168,
-                                                       xi=tail(X.train[,N], 168)
-                                                       )
+fcst.all = sapply(names(prd$fcst),
+                  function(N) diffinv(fcst.all[[N]],
+                                      lag=168,
+                                      xi=tail(X.train[,N], 168)
+                                      )
                   ) %>%
   as.data.frame %>%
   tail(nrow(X.test)) %>%
@@ -155,6 +152,13 @@ MAE = X.obs.all %>%
   pull(AE) %>%
   mean
 MAE
+ME = X.obs.all %>%
+  full_join(arfcst, by=c("time", "location"), suffix=c(".obs", ".fcst")) %>%
+  dplyr::select(time, location, value.obs, value.fcst) %>%
+  mutate(AE = value.obs-value.fcst) %>%
+  pull(AE) %>%
+  mean()
+ME
 ```
 
 ## Comparison with multiple univariate time series
@@ -174,7 +178,8 @@ arfcst = sapply(names(arfcst), function(N) diffinv(arfcst[,N],
   mutate(time = index(X.test), key="fcst.ar") %>%
   gather(key="location", value="value", -time, -key)
 
-plot(X.fcst.all$value, arfcst$value)
+ggplot(data.frame(VAR=X.fcst.all$value, AR=arfcst$value), aes(x=VAR, y=AR)) +
+  geom_point(alpha=0.1)
 ```
 
 Unlike a univariate AR(1) model, this particular VAR prediction contains negative values.
@@ -188,12 +193,12 @@ ggplot(X.all %>% filter(location %in% levels(X.all$location)[1:6]),
   geom_line(alpha=0.5) +
   facet_wrap(~location, ncol=1) +
   ylim(0, NA)
-MAE = X.obs.all %>%
+error = X.obs.all %>%
   full_join(arfcst, by=c("time", "location"), suffix=c(".obs", ".fcst")) %>%
   dplyr::select(time, location, value.obs, value.fcst) %>%
-  mutate(AE = abs(value.obs-value.fcst)) %>%
-  pull(AE) %>%
-  mean()
-MAE
+  mutate(error = value.obs-value.fcst) %>%
+  pull(error)
+cat("MAE:", mean(abs(error)), "\n")
+cat("MEE:", mean(error), "\n")
 ```
 
