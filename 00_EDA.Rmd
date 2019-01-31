@@ -306,3 +306,11 @@ We are interested in the partial autocorrelation - the dependence on a certain t
 ts2.msts <- msts(data.ts2, seasonal.periods=c(24, 168))
 model <- tbats(ts2.msts)
 ```
+
+## Plot for poster
+
+Using placeholder data
+
+```{r}
+
+```

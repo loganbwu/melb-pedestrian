@@ -26,7 +26,7 @@ library(urca)
 
 ```{r}
 # read in a manageable portion of the dataset for now
-raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv", nrows=50000)
+raw.ts <- fread("data/Pedestrian_volume__updated_monthly_.csv", nrow=50000)
 raw.ts[,Date_Time := as.POSIXct(Date_Time, format="%m/%d/%Y %I:%M:%S %p")]
 ```
 
@@ -35,7 +35,9 @@ raw.ts[,Date_Time := as.POSIXct(Date_Time, format="%m/%d/%Y %I:%M:%S %p")]
 ```{r}
 X = raw.ts %>%
   dplyr::select(Date_Time, Sensor_Name, Hourly_Counts) %>%
+  distinct(Date_Time, Sensor_Name, .keep_all=T) %>%
   spread(key=Sensor_Name, value=Hourly_Counts) %>%
+  # drop_na() %>%
   as.xts(frequency=168) %>%
   as.zoo %>%
   na.contiguous # analysis does not include missing data
@@ -145,20 +147,13 @@ ggplot(X.all %>% filter(location %in% levels(X.all$location)[1:6]),
 Error quantification
 
 ```{r}
-MAE = X.obs.all %>%
+error = X.obs.all %>%
   full_join(X.fcst.all, by=c("time", "location"), suffix=c(".obs", ".fcst")) %>%
   dplyr::select(time, location, value.obs, value.fcst) %>%
-  mutate(AE = abs(value.obs-value.fcst)) %>%
-  pull(AE) %>%
-  mean
-MAE
-ME = X.obs.all %>%
-  full_join(arfcst, by=c("time", "location"), suffix=c(".obs", ".fcst")) %>%
-  dplyr::select(time, location, value.obs, value.fcst) %>%
-  mutate(AE = value.obs-value.fcst) %>%
-  pull(AE) %>%
-  mean()
-ME
+  mutate(error = value.obs-value.fcst) %>%
+  pull(error)
+cat("MAE:", mean(abs(error)), "\n")
+cat("MEE:", mean(error), "\n")
 ```
 
 ## Comparison with multiple univariate time series
@@ -168,6 +163,7 @@ myars = lapply(X.train.diff, function(ts) arima(ts, order=c(1,0,0), include.mean
 
 arfcst = sapply(myars, predict, n.ahead=nrow(X.test), se.fit=F) %>%
   as.data.frame
+# arfcst[arfcst < Inf] <- 0
 arfcst = sapply(names(arfcst), function(N) diffinv(arfcst[,N],
                                                        lag=168,
                                                        xi=tail(X.train[,N], 168)
@@ -202,3 +198,11 @@ cat("MAE:", mean(abs(error)), "\n")
 cat("MEE:", mean(error), "\n")
 ```
 
+## Rolling comparison
+
+```{r, eval=F}
+forecast.period = 168 # one week in advance
+var_method = function (X) {
+  
+}
+```

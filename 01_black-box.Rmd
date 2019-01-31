@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo=T, cache=F)
 library(data.table)
 library(sf)
 library(leaflet)
-library(spdep) #easily create weight matrices
+library(spdep)     # easily create weight matrices
 library(starma)
 library(forecast)
 library(ggcorrplot)
@@ -87,6 +87,35 @@ X = do.call(rbind, X) %>%
 names(X) = make.names(names(X))
 X %>% head %>% kable
 ```
+
+## Check collinearity/VIFs
+
+Just compare each series with others, not between lags of a single series.
+
+```{r}
+library(usdm)
+df = X %>% dplyr::select(ends_with(".lag1"))
+v = vif(df) %>%
+   mutate(Variables=str_remove(Variables, "\\.lag1"),
+          Variables=str_replace(Variables, "\\.\\.", " "),
+          Variables=str_replace(Variables, "\\.", " ")) %>%
+  mutate(Variables = str_replace(Variables, "\\.", " ")) %>%
+  mutate(Variables = str_replace(Variables, "\\.", " ")) %>%
+  mutate(Variables = str_replace(Variables, "\\ $", ""))
+ggplot(v %>% filter(Variables %in% v$Variables[1:10]), aes(x=Variables, y=VIF, fill=VIF)) +
+  ylab("Variance Inflation Factor") +
+  geom_col() + coord_flip() +
+  theme_minimal() +
+  scale_fill_gradient(low="#553333", high="#CC3333") +
+  geom_text(aes(label=Variables), hjust="right", vjust="center", color="white", nudge_y=-0.01) +
+  theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank()) +
+  guides(fill=F) +
+  scale_y_log10(breaks=c(1,2,4,6,8,10,20,40,60,100)) +
+  ggsave(file="vif.pdf", width=4, height=2)
+```
+
 
 ## Test RF on train/test split
 
