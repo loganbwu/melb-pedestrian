@@ -59,7 +59,9 @@ data.ts = raw.ts %>%
   mutate(time=as.POSIXct(rownames(.)),
          day=factor(weekdays(time)),
          hour=hour(time))
-names(data.ts) = make.names(names(data.ts))
+old.names = names(data.ts)
+names(data.ts) = make.names(old.names)
+new.names = names(data.ts)
 
 lags = list()
 lags_ix = c(1:nlag, 24, 168)
@@ -96,12 +98,8 @@ Just compare each series with others, not between lags of a single series.
 library(usdm)
 df = X %>% dplyr::select(ends_with(".lag1"))
 v = vif(df) %>%
-   mutate(Variables=str_remove(Variables, "\\.lag1"),
-          Variables=str_replace(Variables, "\\.\\.", " "),
-          Variables=str_replace(Variables, "\\.", " ")) %>%
-  mutate(Variables = str_replace(Variables, "\\.", " ")) %>%
-  mutate(Variables = str_replace(Variables, "\\.", " ")) %>%
-  mutate(Variables = str_replace(Variables, "\\ $", ""))
+  mutate(Variables=str_remove(Variables, "\\.lag1")) %>%
+  mutate(Variables=mapvalues(Variables, from=new.names, to=old.names))
 ggplot(v %>% filter(Variables %in% v$Variables[1:10]), aes(x=Variables, y=VIF, fill=VIF)) +
   ylab("Variance Inflation Factor") +
   geom_col() + coord_flip() +
@@ -110,7 +108,9 @@ ggplot(v %>% filter(Variables %in% v$Variables[1:10]), aes(x=Variables, y=VIF, f
   geom_text(aes(label=Variables), hjust="right", vjust="center", color="white", nudge_y=-0.01) +
   theme(axis.title.y=element_blank(),
         axis.text.y=element_blank(),
-        axis.ticks.y=element_blank()) +
+        axis.ticks.y=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
   guides(fill=F) +
   scale_y_log10(breaks=c(1,2,4,6,8,10,20,40,60,100)) +
   ggsave(file="vif.pdf", width=4, height=2)
@@ -223,11 +223,25 @@ importance_pvalues(rfs[[1]], "altmann", formula=formula("Hourly_Counts ~ . - Sen
 # Try again on differenced series
 
 ```{r, eval=F}
-data.ts.diff = data.ts %>%
-  dplyr::select(-time, -day, -hour)# %>%
+data.ts = raw.ts %>%
+  dplyr::select(Date_Time, Sensor_Name, Hourly_Counts) %>%
+  spread(key=Sensor_Name, value=Hourly_Counts) %>%
+  as.xts(frequency=168) %>%
+  as.zoo %>%
+  na.contiguous %>%# analysis does not include missing data
+  as.data.frame %>%
+  mutate(time=as.POSIXct(rownames(.)),
+         day=factor(weekdays(time)),
+         hour=hour(time))
+old.names = names(data.ts)
+names(data.ts) = make.names(old.names)
+new.names = names(data.ts)
+
+data.ts = data.ts %>%
+  dplyr::select(-time, -day, -hour) %>%
   as.xts %>%
-  diff(lag=168)
-  
+  diff(lag=168) %>%
+  as.data.frame
 
 lags = list()
 lags_ix = c(1:nlag, 24, 168)
@@ -254,4 +268,31 @@ X = do.call(rbind, X) %>%
   arrange(time)
 names(X) = make.names(names(X))
 X %>% head %>% kable
+
+X.train = head(X, round(nrow(X)*frac))
+X.test = tail(X, round(nrow(X)*(1-frac)))
+y.test = X.test %>% pull(Hourly_Counts)
+```
+
+```{r}
+pred <- predict(rf, X.test)
+X.test$pred = pred$predictions
+ggplot(X.test, aes(x=Hourly_Counts, y=pred)) +
+  geom_point(alpha=0.25)
+cat("RMSE", sqrt(mean((X.test$Hourly_Counts-X.test$pred)^2)), "\n")
+cat("MAE", mean(abs(X.test$Hourly_Counts-X.test$pred)))
+
+plt.df.train = X.train %>%
+  dplyr::select(time, location, train=Hourly_Counts) %>%
+  gather(key="key", value="value", -time, -location)
+plt.df.test = X.test %>%
+  dplyr::select(time, location, obs=Hourly_Counts, fcst=pred) %>%
+  gather(key="key", value="value", -time, -location)
+plt.df = rbind(plt.df.train, plt.df.test)
+
+ggplot(plt.df %>% filter(location %in% levels(plt.df$location)[1:6]),
+       aes(x=time, y=value, color=key)) +
+  geom_line(alpha=0.5) +
+  facet_wrap(~location, ncol=1) +
+  ylim(0, NA)
 ```

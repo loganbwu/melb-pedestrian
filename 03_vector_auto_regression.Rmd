@@ -20,6 +20,7 @@ library(xts)
 library(plotly)
 library(vars)
 library(urca)
+library(plyr)
 ```
 
 ## Load data
@@ -41,7 +42,9 @@ X = raw.ts %>%
   as.xts(frequency=168) %>%
   as.zoo %>%
   na.contiguous # analysis does not include missing data
-names(X) = make.names(names(X))
+old.names = names(X)
+names(X) = make.names(old.names)
+new.names = names(X)
 ```
 
 ## Perform differencing
@@ -165,9 +168,9 @@ arfcst = sapply(myars, predict, n.ahead=nrow(X.test), se.fit=F) %>%
   as.data.frame
 # arfcst[arfcst < Inf] <- 0
 arfcst = sapply(names(arfcst), function(N) diffinv(arfcst[,N],
-                                                       lag=168,
-                                                       xi=tail(X.train[,N], 168)
-                                                       )
+                                                   lag=168,
+                                                   xi=tail(X.train[,N], 168)
+                                                   )
                 ) %>%
   as.data.frame %>%
   tail(nrow(X.test)) %>%
@@ -184,25 +187,107 @@ Unlike a univariate AR(1) model, this particular VAR prediction contains negativ
 X.all = X.train.all %>% rbind(X.obs.all) %>% rbind(arfcst) %>%
   mutate(key=factor(key), location=factor(location)) %>%
   arrange(time)
-ggplot(X.all %>% filter(location %in% levels(X.all$location)[1:6]),
+ggplot(X.all %>% filter(location %in% levels(X.all$location)[1:4]) %>%
+         mutate(location=mapvalues(location,
+                                   from=new.names,
+                                   to=old.names),
+                key=mapvalues(key,
+                              from=c("fcst.ar", "obs", "train"),
+                              to=c("Forecast", "Test", "Train"))) %>%
+         filter(time > as.Date("2009-07-15")),
        aes(x=time, y=value, color=key)) +
-  geom_line(alpha=0.5) +
+  geom_line(position=position_jitter(w=0, h=100), alpha=0.5) +
   facet_wrap(~location, ncol=1) +
-  ylim(0, NA)
+  ylim(0, NA) +
+  theme_minimal() +
+  theme(plot.title=element_text(size=12),
+        axis.title.x=element_blank(),
+        axis.text.x=element_text(size=6),
+        axis.text.y=element_text(size=6),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.background = element_rect(size=0, fill="grey", color=NA),
+        strip.text.x = element_text(size=6, margin = margin(0, 0, 0, 0, "cm")),
+        panel.spacing = unit(0.1, "lines")) +
+  labs(y="Hourly count", color="Set", title="Seasonal VAR(1) Model") +
+  scale_y_continuous(breaks=c(0, 4000)) +
+  ggsave(file="ts.pdf", width=4, height=2)
 error = X.obs.all %>%
   full_join(arfcst, by=c("time", "location"), suffix=c(".obs", ".fcst")) %>%
   dplyr::select(time, location, value.obs, value.fcst) %>%
   mutate(error = value.obs-value.fcst) %>%
   pull(error)
+
+library(scales)
+mycols = hue_pal()(3)
+
+ggplot(X.all %>% filter(location %in% levels(X.all$location)[4],
+                        key %in% c("fcst.ar", "obs")) %>%
+         mutate(location=mapvalues(location,
+                                   from=new.names,
+                                   to=old.names),
+                key=mapvalues(key,
+                              from=c("fcst.ar", "obs", "train"),
+                              to=c("Forecast", "Test", "Train"))) %>%
+         filter(time > as.Date("2009-07-15")),
+       aes(x=time, y=value, color=key)) +
+  geom_line(position=position_jitter(w=0, h=50), alpha=0.75) +
+  facet_wrap(~location, ncol=1) +
+  ylim(0, NA) +
+  theme_minimal() +
+  theme(plot.title=element_text(size=12),
+        axis.title.x=element_blank(),
+        axis.text.x=element_text(size=6),
+        axis.title.y=element_blank(),
+        axis.text.y=element_text(size=6),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.background = element_rect(size=0, fill="grey", color=NA),
+        strip.text.x = element_text(size=6, margin = margin(0, 0, 0, 0, "cm")),
+        panel.spacing = unit(0.1, "lines")) +
+  labs(color="Set") +
+  guides(color=F) +
+  scale_y_continuous(breaks=c(0, 4000)) +
+  scale_color_manual(values=mycols[c(1,2)]) +
+  ggsave(file="ts_1.pdf", width=6, height=1.5)
+
 cat("MAE:", mean(abs(error)), "\n")
 cat("MEE:", mean(error), "\n")
 ```
 
 ## Rolling comparison
 
-```{r, eval=F}
+```{r}
+library(lubridate)
 forecast.period = 168 # one week in advance
-var_method = function (X) {
-  
+
+X.diff = X %>% diff(lag=168)
+
+start.dates = index(X)[1:5]
+for (i in seq_along(start.dates)) {
+  d = start.dates[i]
+  X.train = X.diff %>% window(start=d, end=d+days(14))
+  X.test = X.diff %>% window(start=d+days(21), end=d+days(22))
+  myars = lapply(X.train, function(ts) arima(ts, order=c(1,0,0), include.mean=F))
+
+  arfcst = sapply(myars, predict, n.ahead=168, se.fit=F) %>%
+    as.data.frame
+  arfcst = sapply(names(arfcst), function(N) diffinv(arfcst[,N],
+                                                     lag=168,
+                                                     xi=tail(X.train[,N], 168)
+                                                     )
+                  ) %>%
+    as.data.frame %>%
+    tail(nrow(X.test)) %>%
+    mutate(time = index(X.test), key="fcst.ar") %>%
+    gather(key="location", value="value", -time, -key)
+  X.all = X.train %>% rbind(X.obs.all) %>% rbind(arfcst) %>%
+    mutate(key=factor(key), location=factor(location)) %>%
+    arrange(time)
+  error = X.obs.all %>%
+    full_join(arfcst, by=c("time", "location"), suffix=c(".obs", ".fcst")) %>%
+    dplyr::select(time, location, value.obs, value.fcst) %>%
+    mutate(error = value.obs-value.fcst) %>%
+    pull(error)
 }
 ```

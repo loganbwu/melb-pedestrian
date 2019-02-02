@@ -312,5 +312,26 @@ model <- tbats(ts2.msts)
 Using placeholder data
 
 ```{r}
-
+performance = data.frame(
+  method=c("Random forest", "AR(1)", "VAR(1)"),
+  MAE   =c(200, 70, 80),
+  sd    =c(10, 5, 5)
+) %>%
+  mutate(method = factor(method, method))
+ggplot(performance, aes(x=method, y=MAE)) +
+  labs(title="Model Performance", y="Mean absolute forecast error") +
+  geom_col() +
+  geom_errorbar(aes(ymin=MAE-sd, ymax=MAE+sd), width=0.5, color="#333333") +
+  coord_flip() +
+  theme_minimal() +
+  # scale_fill_gradient(low="#AAAACC", high="#AAAAFF") +
+  geom_text(aes(label=method), hjust="right", vjust="center", color="white", nudge_y=-5) +
+  theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  guides(fill=F) +
+  # scale_y_log10(breaks=c(1,2,4,6,8,10,20,40,60,100)) +
+  ggsave(file="mae.pdf", width=2, height=1.5)
 ```
